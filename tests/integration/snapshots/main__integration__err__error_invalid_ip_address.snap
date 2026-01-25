@@ -1,0 +1,5 @@
+---
+source: facet-args/tests/err.rs
+expression: err.to_string()
+---
+error: invalid value for `IpAddr`

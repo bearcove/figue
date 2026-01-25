@@ -1,11 +1,57 @@
 [package]
 name = "figue"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+rust-version = "1.90.0"
 authors = ["Amos Wenger <amos@bearcove.eu>"]
-description = "A CLI arguments, config file and environment based on facet"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bearcove/figue"
+description = "Type-safe CLI arguments, config files, and environment variables powered by Facet reflection"
+documentation = "https://docs.rs/figue"
+keywords = ["cli", "args", "parser", "facet", "command-line"]
+categories = ["command-line-interface"]
 homepage = "https://github.com/bearcove/figue"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
+camino = "1.1"
+facet = { path = "../facet/facet", features = ["indexmap", "camino"] }
+facet-core = { path = "../facet/facet-core" }
+facet-format = { path = "../facet/facet-format" }
+facet-json = { path = "../facet/facet-json" }
+facet-reflect = { path = "../facet/facet-reflect" }
+facet-pretty = { path = "../facet/facet-pretty" }
+facet-error = { path = "../facet/facet-error" }
+heck = "0.5.0"
+indexmap = "2"
+owo-colors = "4"
+tracing = "0.1"
+ariadne = "0.6"
+unicode-width = "0.2.2"
+strip-ansi-escapes = "0.2.1"
+
+[dev-dependencies]
+facet-format = { path = "../facet/facet-format", features = ["tracing"] }
+facet-json = { path = "../facet/facet-json", features = ["tracing"] }
+facet-reflect = { path = "../facet/facet-reflect", features = ["tracing"] }
+facet = { path = "../facet/facet", features = ["all-impls"] }
+facet-default = { path = "../facet/facet-default" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+facet-showcase = { path = "../facet/facet-showcase" }
+facet-solver = { path = "../facet/facet-solver" }
+facet-testhelpers = { path = "../facet/facet-testhelpers" }
+insta = "1"
+tempfile = "3"
+
+[features]
+default = ["rich-diagnostics"]
+rich-diagnostics = []
+doc = ["facet/doc"]
+tracing = ["facet-reflect/tracing", "facet-json/tracing", "facet-format/tracing"]
+
+[[example]]
+name = "args_showcase"

@@ -1,0 +1,8 @@
+---
+source: facet-args/tests/err.rs
+expression: err.to_string()
+---
+error: unexpected positional argument
+
+available options:
+      --name

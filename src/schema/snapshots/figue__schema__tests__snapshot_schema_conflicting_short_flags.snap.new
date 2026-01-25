@@ -1,0 +1,23 @@
+---
+source: src/schema/tests.rs
+assertion_line: 189
+expression: stripped
+---
+Error: duplicate flag `-v`
+   ╭─[ <unknown>:4:5 ]
+   │
+ 2 │ struct ConflictingShortFlags {
+   │        ──────────┬──────────  
+   │                  ╰──────────── defined at src/schema/tests.rs:122
+   │ 
+ 4 │     a: bool,
+   │     ───┬───  
+   │        ╰───── `-v` first defined here
+   │ 
+ 6 │     b: bool,
+   │     ───┬───  
+   │        ╰───── defined again here
+ 7 │ }
+   │ ┬  
+   │ ╰── end of definition
+───╯

@@ -1,0 +1,5 @@
+---
+source: facet-args/tests/err.rs
+expression: err.to_string()
+---
+error: `Args`: Top-level enums must be wrapped in a struct with #[facet(args::subcommand)] attribute to be used as subcommands.

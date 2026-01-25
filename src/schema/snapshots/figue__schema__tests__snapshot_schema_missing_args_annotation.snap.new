@@ -1,0 +1,18 @@
+---
+source: src/schema/tests.rs
+assertion_line: 154
+expression: stripped
+---
+Error: field `foo` is missing a #[facet(args::...)] annotation
+   ╭─[ <unknown>:3:5 ]
+   │
+ 2 │ struct MissingArgsAnnotation {
+   │        ──────────┬──────────  
+   │                  ╰──────────── defined at src/schema/tests.rs:65
+ 3 │     foo: String,
+   │     ─────┬─────  
+   │          ╰─────── field `foo` is missing a #[facet(args::...)] annotation
+ 4 │ }
+   │ ┬  
+   │ ╰── end of definition
+───╯
