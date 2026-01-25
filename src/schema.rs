@@ -111,6 +111,8 @@ pub enum ScalarType {
     String,
     Integer,
     Float,
+    /// Catch-all for types that can be deserialized from a string (e.g., IpAddr, PathBuf).
+    Other,
 }
 
 #[derive(Facet, Debug)]

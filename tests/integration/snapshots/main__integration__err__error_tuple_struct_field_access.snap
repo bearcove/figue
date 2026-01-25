@@ -1,0 +1,32 @@
+---
+source: tests/integration/err.rs
+expression: "$crate :: common :: strip_ansi(& err.to_string())"
+---
+Error: unknown flag: --point.0
+   ╭─[ <cli>:1:1 ]
+   │
+ 1 │ --point.0 10 --point.1 20
+   │ ────┬────  
+   │     ╰────── unknown flag: --point.0
+───╯
+Error: unexpected argument: 10
+   ╭─[ <cli>:1:11 ]
+   │
+ 1 │ --point.0 10 --point.1 20
+   │           ─┬  
+   │            ╰── unexpected argument: 10
+───╯
+Error: unknown flag: --point.1
+   ╭─[ <cli>:1:14 ]
+   │
+ 1 │ --point.0 10 --point.1 20
+   │              ────┬────  
+   │                  ╰────── unknown flag: --point.1
+───╯
+Error: unexpected argument: 20
+   ╭─[ <cli>:1:24 ]
+   │
+ 1 │ --point.0 10 --point.1 20
+   │                        ─┬  
+   │                         ╰── unexpected argument: 20
+───╯

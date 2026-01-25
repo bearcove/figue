@@ -184,7 +184,7 @@ fn variant_cli_name(variant: &Variant) -> String {
 
 fn leaf_schema_from_shape(
     shape: &'static Shape,
-    ctx: &SchemaErrorContext,
+    _ctx: &SchemaErrorContext,
 ) -> Result<LeafSchema, SchemaError> {
     if let Some(scalar) = scalar_kind_from_shape(shape) {
         return Ok(LeafSchema {
@@ -200,7 +200,11 @@ fn leaf_schema_from_shape(
             },
             shape,
         }),
-        _ => Err(SchemaError::new(ctx.clone(), "unsupported leaf type")),
+        // Fallback: treat as Other and let deserialization handle it
+        _ => Ok(LeafSchema {
+            kind: LeafKind::Scalar(ScalarType::Other),
+            shape,
+        }),
     }
 }
 

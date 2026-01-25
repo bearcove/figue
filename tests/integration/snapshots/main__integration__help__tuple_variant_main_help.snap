@@ -1,0 +1,14 @@
+---
+source: tests/integration/help.rs
+expression: "$crate :: common :: strip_ansi(& help)"
+---
+myapp
+
+USAGE:
+    myapp <COMMAND>
+
+COMMANDS:
+    build
+            Build the project
+    test
+            Run tests
