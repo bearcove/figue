@@ -112,11 +112,44 @@ pub(crate) fn coerce_types_from_shape(
             );
             if let Some(scalar) = shape.scalar_type() {
                 match scalar {
-                    facet_core::ScalarType::I8
-                    | facet_core::ScalarType::I16
-                    | facet_core::ScalarType::I32
-                    | facet_core::ScalarType::I64
-                    | facet_core::ScalarType::I128 => {
+                    facet_core::ScalarType::I8 => {
+                        if let Ok(num) = sourced.value.parse::<i64>() {
+                            if num >= i8::MIN as i64 && num <= i8::MAX as i64 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to i8");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
+                            // Value out of range - leave as string to get proper error
+                        }
+                    }
+                    facet_core::ScalarType::I16 => {
+                        if let Ok(num) = sourced.value.parse::<i64>() {
+                            if num >= i16::MIN as i64 && num <= i16::MAX as i64 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to i16");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
+                        }
+                    }
+                    facet_core::ScalarType::I32 => {
+                        if let Ok(num) = sourced.value.parse::<i64>() {
+                            if num >= i32::MIN as i64 && num <= i32::MAX as i64 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to i32");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
+                        }
+                    }
+                    facet_core::ScalarType::I64 | facet_core::ScalarType::I128 => {
                         if let Ok(num) = sourced.value.parse::<i64>() {
                             tracing::trace!(num, "coerce_types_from_shape: coerced to i64");
                             return ConfigValue::Integer(Sourced {
@@ -126,18 +159,52 @@ pub(crate) fn coerce_types_from_shape(
                             });
                         }
                     }
-                    facet_core::ScalarType::U8
-                    | facet_core::ScalarType::U16
-                    | facet_core::ScalarType::U32
-                    | facet_core::ScalarType::U64
-                    | facet_core::ScalarType::U128 => {
+                    facet_core::ScalarType::U8 => {
                         if let Ok(num) = sourced.value.parse::<i64>() {
-                            tracing::trace!(num, "coerce_types_from_shape: coerced to u64");
-                            return ConfigValue::Integer(Sourced {
-                                value: num,
-                                span: sourced.span,
-                                provenance: sourced.provenance.clone(),
-                            });
+                            if num >= 0 && num <= u8::MAX as i64 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to u8");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
+                        }
+                    }
+                    facet_core::ScalarType::U16 => {
+                        if let Ok(num) = sourced.value.parse::<i64>() {
+                            if num >= 0 && num <= u16::MAX as i64 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to u16");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
+                        }
+                    }
+                    facet_core::ScalarType::U32 => {
+                        if let Ok(num) = sourced.value.parse::<i64>() {
+                            if num >= 0 && num <= u32::MAX as i64 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to u32");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
+                        }
+                    }
+                    facet_core::ScalarType::U64 | facet_core::ScalarType::U128 => {
+                        if let Ok(num) = sourced.value.parse::<i64>() {
+                            if num >= 0 {
+                                tracing::trace!(num, "coerce_types_from_shape: coerced to u64");
+                                return ConfigValue::Integer(Sourced {
+                                    value: num,
+                                    span: sourced.span,
+                                    provenance: sourced.provenance.clone(),
+                                });
+                            }
                         }
                     }
                     facet_core::ScalarType::F32 | facet_core::ScalarType::F64 => {

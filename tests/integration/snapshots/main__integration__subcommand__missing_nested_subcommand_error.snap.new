@@ -1,0 +1,6 @@
+---
+source: tests/integration/subcommand.rs
+assertion_line: 379
+expression: "$crate :: common :: strip_ansi(& err.to_string())"
+---
+Error: type mismatch: expected struct for struct variant, got Scalar(Unit)
