@@ -9,7 +9,8 @@ use std::string::String;
 use std::vec::Vec;
 
 /// Supported shells for completion generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, facet::Facet)]
+#[repr(u8)]
 pub enum Shell {
     /// Bash shell
     Bash,

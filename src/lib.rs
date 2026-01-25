@@ -47,6 +47,83 @@ pub use error::{ArgsErrorKind, ArgsErrorWithInput};
 pub use help::{HelpConfig, generate_help, generate_help_for_shape};
 pub use parser::{from_slice_with_config, from_std_args};
 
+/// Standard CLI builtins that can be flattened into your Args struct.
+///
+/// This provides the standard `--help`, `--version`, and `--completions` flags
+/// that most CLI applications need. Flatten it into your Args struct:
+///
+/// ```rust,ignore
+/// use figue::{self as args, FigueBuiltins};
+/// use facet::Facet;
+///
+/// #[derive(Facet)]
+/// struct Args {
+///     /// Your actual arguments
+///     #[facet(args::positional)]
+///     input: String,
+///
+///     /// Standard CLI options
+///     #[facet(flatten)]
+///     builtins: FigueBuiltins,
+/// }
+/// ```
+///
+/// The driver automatically handles these fields:
+/// - `--help` / `-h`: Shows help and exits with code 0
+/// - `--version` / `-V`: Shows version and exits with code 0
+/// - `--completions <SHELL>`: Generates shell completions and exits with code 0
+#[derive(facet::Facet, Default)]
+pub struct FigueBuiltins {
+    /// Show help message and exit.
+    #[facet(crate::named, crate::short = 'h')]
+    pub help: bool,
+
+    /// Show version and exit.
+    #[facet(crate::named, crate::short = 'V')]
+    pub version: bool,
+
+    /// Generate shell completions.
+    #[facet(crate::named)]
+    pub completions: Option<Shell>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::help::generate_help;
+    use crate::schema::Schema;
+
+    #[derive(facet::Facet)]
+    struct ArgsWithBuiltins {
+        /// Input file
+        #[facet(crate::positional)]
+        input: String,
+
+        /// Standard options
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    #[test]
+    fn test_figue_builtins_flatten_in_schema() {
+        let schema = Schema::from_shape(ArgsWithBuiltins::SHAPE);
+        assert!(schema.is_ok(), "Schema should build: {:?}", schema.err());
+    }
+
+    #[test]
+    fn test_figue_builtins_in_help() {
+        let help = generate_help::<ArgsWithBuiltins>(&crate::help::HelpConfig::default());
+        assert!(help.contains("--help"), "help should contain --help");
+        assert!(help.contains("-h"), "help should contain -h");
+        assert!(help.contains("--version"), "help should contain --version");
+        assert!(help.contains("-V"), "help should contain -V");
+        assert!(
+            help.contains("--completions"),
+            "help should contain --completions"
+        );
+    }
+}
+
 /// Parse command-line arguments into a Facet type.
 #[deprecated(note = "Use builder() instead; this entry point will be removed.")]
 pub fn from_slice<T: Facet<'static>>(
