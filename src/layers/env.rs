@@ -989,4 +989,85 @@ mod tests {
         // No config field means all env vars are unused
         assert!(!output.unused_keys.is_empty());
     }
+
+    // ========================================================================
+    // Tests: Flattened config fields
+    // ========================================================================
+
+    #[derive(Facet)]
+    struct CommonConfig {
+        log_level: String,
+        debug: bool,
+    }
+
+    #[derive(Facet)]
+    struct ServerConfigWithFlatten {
+        port: u16,
+        #[facet(flatten)]
+        common: CommonConfig,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithFlattenConfig {
+        #[facet(crate::named)]
+        verbose: bool,
+
+        #[facet(crate::config)]
+        config: ServerConfigWithFlatten,
+    }
+
+    #[test]
+    fn test_flatten_config_parses_nested_path() {
+        // REEF__COMMON__LOG_LEVEL should set config.common.log_level
+        let schema = Schema::from_shape(ArgsWithFlattenConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__COMMON__LOG_LEVEL", "debug")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        let log_level = get_nested(&value, &["config", "common", "log_level"])
+            .expect("config.common.log_level");
+        assert_eq!(get_string(log_level), Some("debug"));
+    }
+
+    #[test]
+    fn test_flatten_config_top_level_and_nested() {
+        // Mix of top-level and flattened config fields
+        let schema = Schema::from_shape(ArgsWithFlattenConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__PORT", "8080"), ("REEF__COMMON__DEBUG", "true")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        let port = get_nested(&value, &["config", "port"]).expect("config.port");
+        assert_eq!(get_string(port), Some("8080"));
+
+        let debug =
+            get_nested(&value, &["config", "common", "debug"]).expect("config.common.debug");
+        assert_eq!(get_string(debug), Some("true"));
+    }
 }
