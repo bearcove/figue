@@ -27,6 +27,8 @@ use core::marker::PhantomData;
 
 use crate::builder::Config;
 use crate::config_value::ConfigValue;
+use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
+use crate::merge::merge_layers;
 use crate::path::Path;
 use crate::provenance::{FileResolution, Provenance};
 use crate::span::Span;
@@ -97,8 +99,92 @@ impl<T: Facet<'static>> Driver<T> {
     /// Execute the driver and return a fully-typed value plus a report.
     pub fn run(self) -> Result<DriverOutput<T>, DriverError> {
         let _ = self.core;
-        let _ = self.config;
-        todo!("wire all phases and diagnostics here")
+
+        let mut layers = ConfigLayers::default();
+        let mut all_diagnostics = Vec::new();
+        let mut file_resolution = None;
+
+        // Phase 1: Parse each layer
+        // Priority order (lowest to highest): defaults < file < env < cli
+
+        // 1a. Defaults layer (TODO: extract defaults from schema)
+        // For now, defaults is empty - this will be filled in when we implement
+        // default value extraction from the schema
+
+        // 1b. File layer
+        if let Some(ref file_config) = self.config.file_config {
+            let result = parse_file(&self.config.schema, file_config);
+            layers.file = result.output;
+            file_resolution = Some(result.resolution);
+            all_diagnostics.extend(layers.file.diagnostics.iter().cloned());
+        }
+
+        // 1c. Environment layer
+        if let Some(ref env_config) = self.config.env_config {
+            layers.env = parse_env(
+                &self.config.schema,
+                env_config,
+                self.config.env_source.as_ref(),
+            );
+            all_diagnostics.extend(layers.env.diagnostics.iter().cloned());
+        }
+
+        // 1d. CLI layer
+        if let Some(ref cli_config) = self.config.cli_config {
+            layers.cli = parse_cli(&self.config.schema, cli_config);
+            all_diagnostics.extend(layers.cli.diagnostics.iter().cloned());
+        }
+
+        // Check for errors before proceeding
+        let has_errors = all_diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error);
+        if has_errors {
+            return Err(DriverError {
+                report: DriverReport {
+                    diagnostics: all_diagnostics,
+                    layers,
+                    file_resolution,
+                },
+            });
+        }
+
+        // Phase 2: Merge layers by priority
+        let values_to_merge: Vec<ConfigValue> = [
+            layers.defaults.value.clone(),
+            layers.file.value.clone(),
+            layers.env.value.clone(),
+            layers.cli.value.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        let merge_result = merge_layers(values_to_merge);
+
+        // Phase 3: TODO - Validate and deserialize into T
+        // For now, we'll just return a placeholder error since we can't
+        // actually deserialize without more infrastructure
+        // This will be implemented when we add the deserialization step
+
+        // For now, return an error indicating this is not yet fully implemented
+        // TODO: Implement deserialization from ConfigValue to T
+        let _ = merge_result;
+
+        Err(DriverError {
+            report: DriverReport {
+                diagnostics: vec![Diagnostic {
+                    message: String::from(
+                        "Driver deserialization not yet implemented - use build_traced() for now",
+                    ),
+                    path: None,
+                    span: None,
+                    severity: Severity::Error,
+                }],
+                layers,
+                file_resolution,
+            },
+        })
     }
 }
 
@@ -143,7 +229,7 @@ impl DriverReport {
 ///
 /// This is intentionally minimal and will grow as we integrate facet-pretty
 /// spans and Ariadne rendering.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Diagnostic {
     /// Human-readable message.
     pub message: String,
