@@ -428,6 +428,15 @@ impl ArgSchema {
     pub fn multiple(&self) -> bool {
         self.multiple
     }
+
+    /// Get the target path for this argument.
+    ///
+    /// For non-flattened fields, this is just `["field_name"]`.
+    /// For flattened fields, this includes the path through the flattened structs,
+    /// e.g., `["common", "verbose"]` for a `verbose` field inside a flattened `common: CommonArgs`.
+    pub fn target_path(&self) -> &Path {
+        &self.target_path
+    }
 }
 
 impl Subcommand {

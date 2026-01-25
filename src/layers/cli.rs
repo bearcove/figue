@@ -105,6 +105,14 @@ pub fn parse_cli(schema: &Schema, cli_config: &CliConfig) -> LayerOutput {
     ctx.into_output()
 }
 
+/// Accumulator for a counted flag.
+struct CountedAccumulator {
+    /// Number of times the flag was seen.
+    count: u64,
+    /// Target path for inserting the value (from schema).
+    target_path: Vec<String>,
+}
+
 /// Parser context holding state during CLI parsing.
 struct ParseContext<'a> {
     /// Input arguments
@@ -119,8 +127,8 @@ struct ParseContext<'a> {
     diagnostics: Vec<Diagnostic>,
     /// Whether we've seen `--` (positional-only mode)
     positional_only: bool,
-    /// Counted flag accumulators: field_name -> count
-    counted: IndexMap<String, u64, RandomState>,
+    /// Counted flag accumulators: field_name -> accumulator with target_path
+    counted: IndexMap<String, CountedAccumulator, RandomState>,
     /// Whether to error on unknown arguments
     strict: bool,
 }
@@ -213,7 +221,7 @@ impl<'a> ParseContext<'a> {
             if let ArgKind::Named { counted, .. } = arg_schema.kind()
                 && *counted
             {
-                self.increment_counted(&flag_snake);
+                self.increment_counted(&flag_snake, arg_schema.target_path());
                 self.index += 1;
                 return;
             }
@@ -241,7 +249,7 @@ impl<'a> ParseContext<'a> {
                 if let ArgKind::Named { counted, .. } = arg_schema.kind()
                     && *counted
                 {
-                    self.increment_counted(name);
+                    self.increment_counted(name, arg_schema.target_path());
                     continue;
                 }
 
@@ -251,8 +259,8 @@ impl<'a> ParseContext<'a> {
                 if is_bool {
                     // Bool flag: set to true
                     let prov = Provenance::cli(format!("-{}", ch), "true");
-                    self.result.insert(
-                        name.clone(),
+                    self.insert_at_path(
+                        arg_schema.target_path(),
                         ConfigValue::Bool(Sourced {
                             value: true,
                             span: None,
@@ -266,7 +274,7 @@ impl<'a> ParseContext<'a> {
                         let value_str = self.args[self.index];
                         let prov_arg = format!("-{}", ch);
                         let value = self.parse_value_string(value_str, &prov_arg);
-                        self.result.insert(name.clone(), value);
+                        self.insert_at_path(arg_schema.target_path(), value);
                     } else {
                         self.emit_error(format!("flag -{} requires a value", ch));
                     }
@@ -275,7 +283,7 @@ impl<'a> ParseContext<'a> {
                     let rest: String = chars[i + 1..].iter().collect();
                     let prov_arg = format!("-{}", ch);
                     let value = self.parse_value_string(&rest, &prov_arg);
-                    self.result.insert(name.clone(), value);
+                    self.insert_at_path(arg_schema.target_path(), value);
                     break; // Consumed rest of chars
                 }
             } else {
@@ -288,7 +296,7 @@ impl<'a> ParseContext<'a> {
     fn parse_flag_value(
         &mut self,
         arg: &str,
-        name: &str,
+        _name: &str,
         schema: &ArgSchema,
         inline_value: Option<&str>,
     ) {
@@ -303,8 +311,8 @@ impl<'a> ParseContext<'a> {
                 true
             };
             let prov = Provenance::cli(arg, value.to_string());
-            self.result.insert(
-                name.to_string(),
+            self.insert_at_path(
+                schema.target_path(),
                 ConfigValue::Bool(Sourced {
                     value,
                     span: None,
@@ -331,7 +339,7 @@ impl<'a> ParseContext<'a> {
 
             let prov_arg = arg.split('=').next().unwrap_or(arg);
             let value = self.parse_value_string(value_str, prov_arg);
-            self.result.insert(name.to_string(), value);
+            self.insert_at_path(schema.target_path(), value);
         }
     }
 
@@ -438,18 +446,18 @@ impl<'a> ParseContext<'a> {
         let arg = self.args[self.index];
 
         // Find the next unset positional argument
-        for (name, schema) in level.args() {
+        for (_name, schema) in level.args() {
             if !matches!(schema.kind(), ArgKind::Positional) {
                 continue;
             }
 
             // Check if already set (unless it's multiple/list)
-            if self.result.contains_key(name) && !schema.multiple() {
+            if self.has_value_at_path(schema.target_path()) && !schema.multiple() {
                 continue;
             }
 
             let value = self.parse_value_string(arg, arg);
-            self.result.insert(name.clone(), value);
+            self.insert_at_path(schema.target_path(), value);
             self.index += 1;
             return true;
         }
@@ -497,25 +505,51 @@ impl<'a> ParseContext<'a> {
         })
     }
 
-    fn increment_counted(&mut self, name: &str) {
-        let count = self.counted.entry(name.to_string()).or_insert(0);
-        *count += 1;
+    /// Insert a value at the given target path.
+    fn insert_at_path(&mut self, target_path: &[String], value: ConfigValue) {
+        let path_refs: Vec<&str> = target_path.iter().map(|s| s.as_str()).collect();
+        insert_nested(&mut self.result, &path_refs, value);
+    }
+
+    /// Check if a value exists at the given target path.
+    fn has_value_at_path(&self, target_path: &[String]) -> bool {
+        let mut current: &IndexMap<String, ConfigValue, RandomState> = &self.result;
+        for (i, key) in target_path.iter().enumerate() {
+            match current.get(key) {
+                Some(ConfigValue::Object(sourced)) if i < target_path.len() - 1 => {
+                    current = &sourced.value;
+                }
+                Some(_) if i == target_path.len() - 1 => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    fn increment_counted(&mut self, name: &str, target_path: &[String]) {
+        let acc = self
+            .counted
+            .entry(name.to_string())
+            .or_insert_with(|| CountedAccumulator {
+                count: 0,
+                target_path: target_path.to_vec(),
+            });
+        acc.count += 1;
     }
 
     fn apply_counted_fields(&mut self) {
-        for (name, count) in &self.counted {
+        for (name, acc) in &self.counted {
             let prov = Provenance::cli(
                 format!("-{}", name.chars().next().unwrap_or('?')),
-                count.to_string(),
+                acc.count.to_string(),
             );
-            self.result.insert(
-                name.clone(),
-                ConfigValue::Integer(Sourced {
-                    value: *count as i64,
-                    span: None,
-                    provenance: Some(prov),
-                }),
-            );
+            let value = ConfigValue::Integer(Sourced {
+                value: acc.count as i64,
+                span: None,
+                provenance: Some(prov),
+            });
+            let path_refs: Vec<&str> = acc.target_path.iter().map(|s| s.as_str()).collect();
+            insert_nested(&mut self.result, &path_refs, value);
         }
     }
 
@@ -712,11 +746,11 @@ mod tests {
                 assert_eq!(a.value, e.value, "string mismatch");
             }
             (ConfigValue::Object(a), ConfigValue::Object(e)) => {
-                assert_eq!(
-                    a.value.keys().collect::<Vec<_>>(),
-                    e.value.keys().collect::<Vec<_>>(),
-                    "object keys mismatch"
-                );
+                let mut actual_keys: Vec<_> = a.value.keys().collect();
+                let mut expected_keys: Vec<_> = e.value.keys().collect();
+                actual_keys.sort();
+                expected_keys.sort();
+                assert_eq!(actual_keys, expected_keys, "object keys mismatch");
                 for (key, expected_val) in &e.value {
                     let actual_val = a
                         .value
@@ -1059,4 +1093,111 @@ mod tests {
     // Type validation is the driver's responsibility when emitting values.
     // Note: parser2 does NOT handle -h/--help specially - that's the driver's job.
     // If -h or --help is needed, they should be defined in the schema.
+
+    // ========================================================================
+    // Flatten tests
+    // ========================================================================
+
+    /// Common arguments that can be flattened into other structs
+    #[derive(Facet)]
+    struct CommonArgs {
+        /// Enable verbose output
+        #[facet(args::named, args::short = 'v')]
+        verbose: bool,
+
+        /// Enable quiet mode
+        #[facet(args::named, args::short = 'q')]
+        quiet: bool,
+    }
+
+    /// Args struct with flattened common args
+    #[derive(Facet)]
+    struct ArgsWithFlatten {
+        /// Input file
+        #[facet(args::positional)]
+        input: String,
+
+        /// Common options
+        #[facet(flatten)]
+        common: CommonArgs,
+    }
+
+    #[test]
+    fn test_flatten_parses_flags_into_nested_structure() {
+        // Parse --verbose and check it ends up nested under "common"
+        let expected = cv::object([
+            ("input", cv::string("file.txt", "file.txt")),
+            ("common", cv::object([("verbose", cv::bool(true, "-v"))])),
+        ]);
+        assert_parses_to::<ArgsWithFlatten>(&["-v", "file.txt"], expected);
+    }
+
+    #[test]
+    fn test_flatten_multiple_flags() {
+        let expected = cv::object([
+            ("input", cv::string("test.txt", "test.txt")),
+            (
+                "common",
+                cv::object([
+                    ("verbose", cv::bool(true, "-v")),
+                    ("quiet", cv::bool(true, "-q")),
+                ]),
+            ),
+        ]);
+        assert_parses_to::<ArgsWithFlatten>(&["-v", "-q", "test.txt"], expected);
+    }
+
+    #[test]
+    fn test_flatten_long_flags() {
+        let expected = cv::object([
+            ("input", cv::string("data.txt", "data.txt")),
+            (
+                "common",
+                cv::object([("verbose", cv::bool(true, "--verbose"))]),
+            ),
+        ]);
+        assert_parses_to::<ArgsWithFlatten>(&["--verbose", "data.txt"], expected);
+    }
+
+    /// Nested flatten - common inside options inside top-level
+    #[derive(Facet)]
+    struct NestedCommon {
+        /// Enable debug mode
+        #[facet(args::named)]
+        debug: bool,
+    }
+
+    #[derive(Facet)]
+    struct MiddleLayer {
+        /// Nested common args
+        #[facet(flatten)]
+        nested: NestedCommon,
+
+        /// Log level
+        #[facet(args::named)]
+        log_level: Option<String>,
+    }
+
+    #[derive(Facet)]
+    struct DeepFlatten {
+        /// Input path
+        #[facet(args::positional)]
+        path: String,
+
+        /// Middle layer options
+        #[facet(flatten)]
+        options: MiddleLayer,
+    }
+
+    #[test]
+    fn test_deeply_nested_flatten() {
+        let expected = cv::object([
+            ("path", cv::string("file.txt", "file.txt")),
+            (
+                "options",
+                cv::object([("nested", cv::object([("debug", cv::bool(true, "--debug"))]))]),
+            ),
+        ]);
+        assert_parses_to::<DeepFlatten>(&["--debug", "file.txt"], expected);
+    }
 }
