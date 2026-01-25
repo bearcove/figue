@@ -136,6 +136,25 @@ impl<T> ConfigBuilder<T> {
         self
     }
 
+    /// Finalize the builder and return a Config for use with the Driver.
+    ///
+    /// After calling this, create a `Driver` and call `run()`:
+    /// ```ignore
+    /// let config = builder::<MyArgs>()?.cli(...).env(...).build();
+    /// let output = Driver::new(config).run().expect_value();
+    /// ```
+    pub fn build(self) -> Config<T> {
+        Config {
+            schema: self.schema,
+            cli_config: self.cli_config,
+            help_config: self.help_config,
+            env_config: self.env_config,
+            file_config: self.file_config,
+            env_source: self.env_source,
+            _phantom: PhantomData,
+        }
+    }
+
     /// Build the layered configuration, returning just the merged ConfigValue.
     ///
     /// This parses all configured layers and merges them in priority order:

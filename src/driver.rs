@@ -2,14 +2,16 @@
 //!
 //! # Phases
 //! 1. **Parse layers**: CLI, env, file (defaults filled during deserialization)
-//! 2. **Merge** layers by priority (CLI > env > file > defaults)
-//! 3. **Deserialize** merged ConfigValue into the target Facet type
+//! 2. **Check special fields**: If help/version/completions was requested, short-circuit
+//! 3. **Merge** layers by priority (CLI > env > file > defaults)
+//! 4. **Deserialize** merged ConfigValue into the target Facet type
 //!
 //! # TODO
 //! - [x] Wire override tracking from merge result into DriverReport
 //! - [x] Define DriverError enum (Failed, Help, Completions, Version)
 //! - [x] Implement expect_value() on DriverResult
-//! - [ ] Add figue::help, figue::completions, figue::version attribute detection
+//! - [x] Add figue::help, figue::completions, figue::version attribute detection
+//! - [x] Handle special fields in Driver::run() before deserialization
 //! - [ ] Collect unused keys from layer parsers into LayerOutput
 //! - [ ] Add facet-validate pass after deserialization
 //! - [ ] Improve render_pretty() with Ariadne integration
@@ -22,8 +24,10 @@ use std::string::String;
 use std::vec::Vec;
 
 use crate::builder::Config;
+use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
 use crate::config_value_parser::from_config_value;
+use crate::help::generate_help_for_shape;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
 use crate::path::Path;
@@ -130,6 +134,69 @@ impl<T: Facet<'static>> Driver<T> {
         if let Some(ref cli_config) = self.config.cli_config {
             layers.cli = parse_cli(&self.config.schema, cli_config);
             all_diagnostics.extend(layers.cli.diagnostics.iter().cloned());
+        }
+
+        // Phase 1.5: Check special fields (help/version/completions)
+        // These short-circuit before merge/deserialization
+        if let Some(cli_value) = &layers.cli.value {
+            let special = self.config.schema.special();
+
+            // Check for --help
+            if let Some(ref help_path) = special.help {
+                if let Some(ConfigValue::Bool(b)) = cli_value.get_by_path(help_path) {
+                    if b.value {
+                        let help_config = self
+                            .config
+                            .help_config
+                            .as_ref()
+                            .cloned()
+                            .unwrap_or_default();
+                        let text = generate_help_for_shape(T::SHAPE, &help_config);
+                        return Err(DriverError::Help { text });
+                    }
+                }
+            }
+
+            // Check for --version
+            if let Some(ref version_path) = special.version {
+                if let Some(ConfigValue::Bool(b)) = cli_value.get_by_path(version_path) {
+                    if b.value {
+                        let version = self
+                            .config
+                            .help_config
+                            .as_ref()
+                            .and_then(|h| h.version.clone())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        let program_name = self
+                            .config
+                            .help_config
+                            .as_ref()
+                            .and_then(|h| h.program_name.clone())
+                            .or_else(|| std::env::args().next())
+                            .unwrap_or_else(|| "program".to_string());
+                        let text = format!("{} {}", program_name, version);
+                        return Err(DriverError::Version { text });
+                    }
+                }
+            }
+
+            // Check for --completions <shell>
+            if let Some(ref completions_path) = special.completions {
+                if let Some(value) = cli_value.get_by_path(completions_path) {
+                    // The value should be a string representing the shell name
+                    if let Some(shell) = extract_shell_from_value(value) {
+                        let program_name = self
+                            .config
+                            .help_config
+                            .as_ref()
+                            .and_then(|h| h.program_name.clone())
+                            .or_else(|| std::env::args().next())
+                            .unwrap_or_else(|| "program".to_string());
+                        let script = generate_completions_for_shape(T::SHAPE, shell, &program_name);
+                        return Err(DriverError::Completions { script });
+                    }
+                }
+            }
         }
 
         // Check for errors before proceeding
@@ -333,6 +400,29 @@ impl Severity {
     }
 }
 
+/// Extract a Shell value from a ConfigValue.
+///
+/// The completions field is `Option<Shell>`, so after CLI parsing we get
+/// either nothing (None) or a string like "bash", "zsh", "fish".
+fn extract_shell_from_value(value: &ConfigValue) -> Option<Shell> {
+    match value {
+        ConfigValue::String(s) => match s.value.to_lowercase().as_str() {
+            "bash" => Some(Shell::Bash),
+            "zsh" => Some(Shell::Zsh),
+            "fish" => Some(Shell::Fish),
+            _ => None,
+        },
+        // Could also be an enum variant name directly
+        ConfigValue::Enum(e) => match e.value.variant.to_lowercase().as_str() {
+            "bash" => Some(Shell::Bash),
+            "zsh" => Some(Shell::Zsh),
+            "fish" => Some(Shell::Fish),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Error returned by the driver.
 ///
 /// Not all variants are "errors" in the traditional sense - Help, Completions,
@@ -398,3 +488,229 @@ impl std::fmt::Debug for DriverError {
 }
 
 impl std::error::Error for DriverError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate as figue;
+    use crate::FigueBuiltins;
+    use crate::builder::builder;
+    use facet::Facet;
+
+    /// Args struct with FigueBuiltins flattened in
+    #[derive(Facet, Debug)]
+    struct ArgsWithBuiltins {
+        /// Input file
+        #[facet(figue::positional)]
+        input: Option<String>,
+
+        /// Standard CLI options
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    #[test]
+    fn test_driver_help_flag() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["--help"]))
+            .help(|h| h.program_name("test-app").version("1.0.0"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Err(DriverError::Help { text }) => {
+                assert!(
+                    text.contains("test-app"),
+                    "help should contain program name"
+                );
+                assert!(text.contains("--help"), "help should mention --help flag");
+            }
+            other => panic!("expected DriverError::Help, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_driver_help_short_flag() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["-h"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        assert!(
+            matches!(result, Err(DriverError::Help { .. })),
+            "expected DriverError::Help"
+        );
+    }
+
+    #[test]
+    fn test_driver_version_flag() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["--version"]))
+            .help(|h| h.program_name("test-app").version("2.0.0"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Err(DriverError::Version { text }) => {
+                assert!(
+                    text.contains("test-app"),
+                    "version should contain program name"
+                );
+                assert!(
+                    text.contains("2.0.0"),
+                    "version should contain version number"
+                );
+            }
+            other => panic!("expected DriverError::Version, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_driver_version_short_flag() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["-V"]))
+            .help(|h| h.program_name("test-app").version("3.0.0"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Err(DriverError::Version { text }) => {
+                assert!(
+                    text.contains("3.0.0"),
+                    "version should contain version number"
+                );
+            }
+            other => panic!("expected DriverError::Version, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_driver_completions_bash() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["--completions", "bash"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Err(DriverError::Completions { script }) => {
+                assert!(
+                    script.contains("_test-app"),
+                    "bash completions should contain function name"
+                );
+                assert!(
+                    script.contains("complete"),
+                    "bash completions should contain 'complete'"
+                );
+            }
+            other => panic!("expected DriverError::Completions, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_driver_completions_zsh() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["--completions", "zsh"]))
+            .help(|h| h.program_name("myapp"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Err(DriverError::Completions { script }) => {
+                assert!(
+                    script.contains("#compdef myapp"),
+                    "zsh completions should contain #compdef"
+                );
+            }
+            other => panic!("expected DriverError::Completions, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_driver_completions_fish() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["--completions", "fish"]))
+            .help(|h| h.program_name("myapp"))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Err(DriverError::Completions { script }) => {
+                assert!(
+                    script.contains("complete -c myapp"),
+                    "fish completions should contain 'complete -c myapp'"
+                );
+            }
+            other => panic!("expected DriverError::Completions, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_driver_normal_execution() {
+        let config = builder::<ArgsWithBuiltins>()
+            .unwrap()
+            .cli(|cli| cli.args(["myfile.txt"]))
+            .build();
+
+        let driver = Driver::new(config);
+        let result = driver.run();
+
+        match result {
+            Ok(output) => {
+                assert_eq!(output.value.input, Some("myfile.txt".to_string()));
+                assert!(!output.value.builtins.help);
+                assert!(!output.value.builtins.version);
+                assert!(output.value.builtins.completions.is_none());
+            }
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_driver_error_exit_codes() {
+        let help_err = DriverError::Help {
+            text: "help".to_string(),
+        };
+        let version_err = DriverError::Version {
+            text: "1.0".to_string(),
+        };
+        let completions_err = DriverError::Completions {
+            script: "script".to_string(),
+        };
+        let failed_err = DriverError::Failed {
+            report: DriverReport::default(),
+        };
+
+        assert_eq!(help_err.exit_code(), 0);
+        assert_eq!(version_err.exit_code(), 0);
+        assert_eq!(completions_err.exit_code(), 0);
+        assert_eq!(failed_err.exit_code(), 1);
+
+        assert!(help_err.is_success());
+        assert!(version_err.is_success());
+        assert!(completions_err.is_success());
+        assert!(!failed_err.is_success());
+    }
+}

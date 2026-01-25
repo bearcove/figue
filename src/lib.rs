@@ -72,18 +72,18 @@ pub use parser::{from_slice_with_config, from_std_args};
 /// - `--help` / `-h`: Shows help and exits with code 0
 /// - `--version` / `-V`: Shows version and exits with code 0
 /// - `--completions <SHELL>`: Generates shell completions and exits with code 0
-#[derive(facet::Facet, Default)]
+#[derive(facet::Facet, Default, Debug)]
 pub struct FigueBuiltins {
     /// Show help message and exit.
-    #[facet(crate::named, crate::short = 'h')]
+    #[facet(crate::named, crate::short = 'h', default)]
     pub help: bool,
 
     /// Show version and exit.
-    #[facet(crate::named, crate::short = 'V')]
+    #[facet(crate::named, crate::short = 'V', default)]
     pub version: bool,
 
     /// Generate shell completions.
-    #[facet(crate::named)]
+    #[facet(crate::named, default)]
     pub completions: Option<Shell>,
 }
 
