@@ -11,5 +11,5 @@ struct Args {
 }
 
 fn main() {
-    args::builder::<Args>();
+    let _ = args::builder::<Args>();
 }

@@ -2,10 +2,12 @@
 source: tests/integration/ariadne.rs
 expression: ariadne_output
 ---
-Error: Deserialization failed: Required field 'required_field' is missing
-   ╭─[ <unknown>:1:1 ]
-   │
- 1 │ 
-   │ │ 
-   │ ╰─ Deserialization failed: Required field 'required_field' is missing
-───╯
+Error: Missing required fields:
+
+Sources:
+  cli --settings.*
+  defaults
+
+required_field  ❌ MISSING <String> 
+
+Run with --help for usage information.

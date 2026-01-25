@@ -58,6 +58,12 @@ pub(crate) fn coerce_types_from_shape(
     value: &ConfigValue,
     shape: &'static facet_core::Shape,
 ) -> ConfigValue {
+    tracing::trace!(
+        shape = shape.type_identifier,
+        ?value,
+        "coerce_types_from_shape: entering"
+    );
+
     match value {
         ConfigValue::Object(sourced) => {
             let mut new_map = sourced.value.clone();
@@ -99,6 +105,11 @@ pub(crate) fn coerce_types_from_shape(
         }
         ConfigValue::String(sourced) => {
             // Try to coerce string to the target type
+            tracing::trace!(
+                scalar_type = ?shape.scalar_type(),
+                string_value = %sourced.value,
+                "coerce_types_from_shape: trying to coerce string"
+            );
             if let Some(scalar) = shape.scalar_type() {
                 match scalar {
                     facet_core::ScalarType::I8
@@ -107,6 +118,7 @@ pub(crate) fn coerce_types_from_shape(
                     | facet_core::ScalarType::I64
                     | facet_core::ScalarType::I128 => {
                         if let Ok(num) = sourced.value.parse::<i64>() {
+                            tracing::trace!(num, "coerce_types_from_shape: coerced to i64");
                             return ConfigValue::Integer(Sourced {
                                 value: num,
                                 span: sourced.span,
@@ -120,6 +132,7 @@ pub(crate) fn coerce_types_from_shape(
                     | facet_core::ScalarType::U64
                     | facet_core::ScalarType::U128 => {
                         if let Ok(num) = sourced.value.parse::<i64>() {
+                            tracing::trace!(num, "coerce_types_from_shape: coerced to u64");
                             return ConfigValue::Integer(Sourced {
                                 value: num,
                                 span: sourced.span,

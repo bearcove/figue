@@ -39,8 +39,6 @@ facet-format = { path = "../facet/facet-format", features = ["tracing"] }
 facet-json = { path = "../facet/facet-json", features = ["tracing"] }
 facet-reflect = { path = "../facet/facet-reflect", features = ["tracing"] }
 facet = { path = "../facet/facet", features = ["all-impls"] }
-facet-default = { path = "../facet/facet-default" }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 facet-showcase = { path = "../facet/facet-showcase" }
 facet-solver = { path = "../facet/facet-solver" }
 facet-testhelpers = { path = "../facet/facet-testhelpers" }

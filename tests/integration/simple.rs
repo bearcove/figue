@@ -125,7 +125,7 @@ fn test_inf_float_parsing() {
 fn test_short_rename() {
     #[derive(Facet, Debug)]
     struct Args {
-        #[facet(args::named, args::short, rename = "j")]
+        #[facet(args::named, args::short = 'j')]
         concurrency: i64,
     }
     let args: Args = figue::from_slice(&["-j", "4"]).unwrap();

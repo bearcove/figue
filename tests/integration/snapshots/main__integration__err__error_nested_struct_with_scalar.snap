@@ -1,6 +1,5 @@
 ---
 source: tests/integration/err.rs
-assertion_line: 156
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
 Error: type mismatch: expected struct start, got Scalar(Str("simple"))

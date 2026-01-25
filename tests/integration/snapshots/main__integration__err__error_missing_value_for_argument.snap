@@ -1,12 +1,11 @@
 ---
 source: tests/integration/err.rs
-assertion_line: 79
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: unknown flag: --c0ncurrency
+Error: flag --concurrency requires a value
    ╭─[ <cli>:1:1 ]
    │
- 1 │ --c0ncurrency
+ 1 │ --concurrency
    │ ──────┬──────  
-   │       ╰──────── unknown flag: --c0ncurrency
+   │       ╰──────── flag --concurrency requires a value
 ───╯

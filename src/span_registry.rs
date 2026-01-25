@@ -58,6 +58,7 @@ impl SpanRegistry {
     /// Look up a virtual span to get the real span and provenance.
     ///
     /// Returns None if the virtual span doesn't match any registered entry.
+    #[allow(dead_code)]
     pub fn lookup(&self, virtual_span: Span) -> Option<&SpanEntry> {
         // Find the entry whose virtual offset range contains this span
         let mut current_offset = 0;

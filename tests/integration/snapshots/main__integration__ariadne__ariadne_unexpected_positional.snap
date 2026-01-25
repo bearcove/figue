@@ -3,7 +3,7 @@ source: tests/integration/ariadne.rs
 expression: ariadne_output
 ---
 Error: unexpected argument: unexpected
-   ╭─[ <unknown>:1:1 ]
+   ╭─[ <cli>:1:1 ]
    │
  1 │ unexpected --name value
    │ ─────┬────  

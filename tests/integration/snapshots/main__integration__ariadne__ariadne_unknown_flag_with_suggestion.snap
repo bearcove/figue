@@ -3,14 +3,14 @@ source: tests/integration/ariadne.rs
 expression: ariadne_output
 ---
 Error: unknown flag: --c0ncurrency
-   ╭─[ <unknown>:1:1 ]
+   ╭─[ <cli>:1:1 ]
    │
  1 │ --c0ncurrency 4
    │ ──────┬──────  
    │       ╰──────── unknown flag: --c0ncurrency
 ───╯
 Error: unexpected argument: 4
-   ╭─[ <unknown>:1:15 ]
+   ╭─[ <cli>:1:15 ]
    │
  1 │ --c0ncurrency 4
    │               ┬  

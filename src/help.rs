@@ -299,6 +299,7 @@ fn get_short_flag(field: &Field) -> Option<char> {
 }
 
 /// Generate help for a specific subcommand variant.
+#[allow(dead_code)]
 pub fn generate_subcommand_help(
     variant: &'static Variant,
     parent_program: &str,

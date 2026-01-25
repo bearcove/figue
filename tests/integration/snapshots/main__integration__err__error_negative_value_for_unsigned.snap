@@ -1,6 +1,5 @@
 ---
 source: tests/integration/err.rs
-assertion_line: 103
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
 Error: failed to parse "-10" as usize

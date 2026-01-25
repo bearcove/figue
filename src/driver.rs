@@ -32,9 +32,9 @@ use crate::help::generate_help_for_shape;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
 use crate::path::Path;
-use crate::provenance::{ConfigFile, FileResolution, Override, Provenance};
+use crate::provenance::{FileResolution, Override, Provenance};
 use crate::span::Span;
-use crate::span_registry::{SpanRegistry, assign_virtual_spans};
+use crate::span_registry::assign_virtual_spans;
 use facet_core::Facet;
 
 /// Diagnostics for a single layer.
@@ -159,59 +159,57 @@ impl<T: Facet<'static>> Driver<T> {
             let special = self.config.schema.special();
 
             // Check for --help
-            if let Some(ref help_path) = special.help {
-                if let Some(ConfigValue::Bool(b)) = cli_value.get_by_path(help_path) {
-                    if b.value {
-                        let help_config = self
-                            .config
-                            .help_config
-                            .as_ref()
-                            .cloned()
-                            .unwrap_or_default();
-                        let text = generate_help_for_shape(T::SHAPE, &help_config);
-                        return Err(DriverError::Help { text });
-                    }
-                }
+            if let Some(ref help_path) = special.help
+                && let Some(ConfigValue::Bool(b)) = cli_value.get_by_path(help_path)
+                && b.value
+            {
+                let help_config = self
+                    .config
+                    .help_config
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_default();
+                let text = generate_help_for_shape(T::SHAPE, &help_config);
+                return Err(DriverError::Help { text });
             }
 
             // Check for --version
-            if let Some(ref version_path) = special.version {
-                if let Some(ConfigValue::Bool(b)) = cli_value.get_by_path(version_path) {
-                    if b.value {
-                        let version = self
-                            .config
-                            .help_config
-                            .as_ref()
-                            .and_then(|h| h.version.clone())
-                            .unwrap_or_else(|| "unknown".to_string());
-                        let program_name = self
-                            .config
-                            .help_config
-                            .as_ref()
-                            .and_then(|h| h.program_name.clone())
-                            .or_else(|| std::env::args().next())
-                            .unwrap_or_else(|| "program".to_string());
-                        let text = format!("{} {}", program_name, version);
-                        return Err(DriverError::Version { text });
-                    }
-                }
+            if let Some(ref version_path) = special.version
+                && let Some(ConfigValue::Bool(b)) = cli_value.get_by_path(version_path)
+                && b.value
+            {
+                let version = self
+                    .config
+                    .help_config
+                    .as_ref()
+                    .and_then(|h| h.version.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let program_name = self
+                    .config
+                    .help_config
+                    .as_ref()
+                    .and_then(|h| h.program_name.clone())
+                    .or_else(|| std::env::args().next())
+                    .unwrap_or_else(|| "program".to_string());
+                let text = format!("{} {}", program_name, version);
+                return Err(DriverError::Version { text });
             }
 
             // Check for --completions <shell>
-            if let Some(ref completions_path) = special.completions {
-                if let Some(value) = cli_value.get_by_path(completions_path) {
-                    // The value should be a string representing the shell name
-                    if let Some(shell) = extract_shell_from_value(value) {
-                        let program_name = self
-                            .config
-                            .help_config
-                            .as_ref()
-                            .and_then(|h| h.program_name.clone())
-                            .or_else(|| std::env::args().next())
-                            .unwrap_or_else(|| "program".to_string());
-                        let script = generate_completions_for_shape(T::SHAPE, shell, &program_name);
-                        return Err(DriverError::Completions { script });
-                    }
+            if let Some(ref completions_path) = special.completions
+                && let Some(value) = cli_value.get_by_path(completions_path)
+            {
+                // The value should be a string representing the shell name
+                if let Some(shell) = extract_shell_from_value(value) {
+                    let program_name = self
+                        .config
+                        .help_config
+                        .as_ref()
+                        .and_then(|h| h.program_name.clone())
+                        .or_else(|| std::env::args().next())
+                        .unwrap_or_else(|| "program".to_string());
+                    let script = generate_completions_for_shape(T::SHAPE, shell, &program_name);
+                    return Err(DriverError::Completions { script });
                 }
             }
         }
@@ -222,14 +220,14 @@ impl<T: Facet<'static>> Driver<T> {
             .any(|d| d.severity == Severity::Error);
         if has_errors {
             return Err(DriverError::Failed {
-                report: DriverReport {
+                report: Box::new(DriverReport {
                     diagnostics: all_diagnostics,
                     layers,
                     file_resolution,
                     overrides: Vec::new(),
                     cli_args_source,
                     source_name: "<cli>".to_string(),
-                },
+                }),
             });
         }
 
@@ -268,7 +266,7 @@ impl<T: Facet<'static>> Driver<T> {
             );
 
             return Err(DriverError::Failed {
-                report: DriverReport {
+                report: Box::new(DriverReport {
                     diagnostics: vec![Diagnostic {
                         message,
                         path: None,
@@ -280,7 +278,7 @@ impl<T: Facet<'static>> Driver<T> {
                     overrides,
                     cli_args_source,
                     source_name: "<cli>".to_string(),
-                },
+                }),
             });
         }
 
@@ -306,7 +304,7 @@ impl<T: Facet<'static>> Driver<T> {
                 };
 
                 return Err(DriverError::Failed {
-                    report: DriverReport {
+                    report: Box::new(DriverReport {
                         diagnostics: vec![Diagnostic {
                             message: e.to_string(),
                             path: None,
@@ -318,7 +316,7 @@ impl<T: Facet<'static>> Driver<T> {
                         overrides,
                         cli_args_source: source_contents,
                         source_name,
-                    },
+                    }),
                 });
             }
         };
@@ -611,7 +609,7 @@ pub enum DriverError {
     /// Parsing or validation failed - exit code 1
     Failed {
         /// Report containing all diagnostics
-        report: DriverReport,
+        report: Box<DriverReport>,
     },
 
     /// Help was requested (via `#[facet(figue::help)]` field) - exit code 0
@@ -895,7 +893,7 @@ mod tests {
             script: "script".to_string(),
         };
         let failed_err = DriverError::Failed {
-            report: DriverReport::default(),
+            report: Box::new(DriverReport::default()),
         };
 
         assert_eq!(help_err.exit_code(), 0);

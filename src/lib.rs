@@ -7,7 +7,7 @@
 
 extern crate self as figue;
 
-pub(crate) mod arg;
+// pub(crate) mod arg;
 pub(crate) mod builder;
 pub(crate) mod completions;
 pub(crate) mod config_format;

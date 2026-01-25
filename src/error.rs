@@ -585,6 +585,7 @@ impl From<ReflectError> for ArgsErrorKind {
 
 impl ArgsError {
     /// Creates a new args error
+    #[cfg(test)]
     pub const fn new(kind: ArgsErrorKind, span: Span) -> Self {
         Self { span, kind }
     }
@@ -593,15 +594,6 @@ impl ArgsError {
 impl fmt::Display for ArgsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
-    }
-}
-
-/// Extract variants from a shape (if it's an enum)
-pub(crate) const fn get_variants_from_shape(shape: &'static Shape) -> &'static [Variant] {
-    if let Type::User(UserType::Enum(enum_type)) = shape.ty {
-        enum_type.variants
-    } else {
-        &[]
     }
 }
 

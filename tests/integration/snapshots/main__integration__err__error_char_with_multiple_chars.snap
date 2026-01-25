@@ -1,6 +1,5 @@
 ---
 source: tests/integration/err.rs
-assertion_line: 139
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
 Error: failed to parse "abc" as char

@@ -22,7 +22,7 @@ use crate::{
     layers::{
         cli::{CliConfig, CliConfigBuilder},
         env::{EnvConfig, EnvConfigBuilder, EnvSource, StdEnv},
-        file::{FileConfig, FormatRegistry},
+        file::FileConfig,
     },
     provenance::{ConfigResult, FilePathStatus, FileResolution, Provenance},
     schema::{Schema, error::SchemaError},
@@ -185,7 +185,6 @@ impl<T> ConfigBuilder<T> {
             if !exists {
                 return Err(BuilderError::FileNotFound {
                     path: explicit.clone(),
-                    resolution: resolution.clone(),
                 });
             }
 
@@ -465,8 +464,6 @@ pub enum BuilderError {
     FileNotFound {
         /// The path that was explicitly requested.
         path: Utf8PathBuf,
-        /// File resolution information showing what was tried.
-        resolution: FileResolution,
     },
 
     /// Error reading config file: {0}: {1}

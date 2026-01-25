@@ -41,10 +41,27 @@ pub fn from_config_value<T>(value: &ConfigValue) -> Result<T, ConfigValueDeseria
 where
     T: Facet<'static>,
 {
+    tracing::trace!(
+        shape = T::SHAPE.type_identifier,
+        ?value,
+        "from_config_value: starting"
+    );
+
     // First, fill in defaults for missing fields based on the target shape
     let value_with_defaults = fill_defaults_from_shape(value, T::SHAPE);
+    tracing::trace!(
+        ?value_with_defaults,
+        "from_config_value: after fill_defaults_from_shape"
+    );
 
-    let parser = ConfigValueParser::new(&value_with_defaults, T::SHAPE);
+    // Coerce string values to their target types (CLI/env values come in as strings)
+    let value_coerced = crate::reflection::coerce_types_from_shape(&value_with_defaults, T::SHAPE);
+    tracing::trace!(
+        ?value_coerced,
+        "from_config_value: after coerce_types_from_shape"
+    );
+
+    let parser = ConfigValueParser::new(&value_coerced, T::SHAPE);
     let mut deserializer = FormatDeserializer::new_owned(parser);
     deserializer
         .deserialize()
@@ -572,7 +589,7 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
                                 return Ok(Some(ParseEvent::StructStart(ContainerKind::Object)));
                             }
                         }
-                        2 | _ => {
+                        _ => {
                             // Phase 2: emit outer StructEnd (the enum wrapper)
                             return Ok(Some(ParseEvent::StructEnd));
                         }
