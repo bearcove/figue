@@ -521,7 +521,19 @@ impl<'a> ParseContext<'a> {
 
         if let Some(subcommand) = level.subcommands().get(&arg_kebab) {
             self.index += 1;
-            let fields = self.parse_subcommand_args(subcommand);
+            let mut fields = self.parse_subcommand_args(subcommand);
+
+            // For flattened tuple variants like `Bench(BenchArgs)`, wrap the fields
+            // in a "0" field since facet expects tuple field positions as keys.
+            if subcommand.is_flattened_tuple() {
+                let inner_fields = core::mem::take(&mut fields);
+                let inner_object = ConfigValue::Object(Sourced {
+                    value: inner_fields,
+                    span: None,
+                    provenance: None,
+                });
+                fields.insert("0".to_string(), inner_object);
+            }
 
             // Use the original Rust variant name for deserialization
             // (facet-format expects "Build", not "build")
@@ -1216,7 +1228,8 @@ mod tests {
         assert_parses_to::<ArgsWithSubcommand>(
             &["build"],
             // Variant name is PascalCase for facet-format deserialization
-            cv::object([("command", cv::enumv("Build", []))]),
+            // Tuple variants wrap fields in "0" for the first tuple position
+            cv::object([("command", cv::enumv("Build", [("0", cv::object([]))]))]),
         );
     }
 
@@ -1227,7 +1240,11 @@ mod tests {
             cv::object([(
                 "command",
                 // Variant name is PascalCase for facet-format deserialization
-                cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
+                // Tuple variants wrap fields in "0" for the first tuple position
+                cv::enumv(
+                    "Build",
+                    [("0", cv::object([("release", cv::bool(true, "--release"))]))],
+                ),
             )]),
         );
     }
@@ -1241,7 +1258,11 @@ mod tests {
                 (
                     "command",
                     // Variant name is PascalCase for facet-format deserialization
-                    cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
+                    // Tuple variants wrap fields in "0" for the first tuple position
+                    cv::enumv(
+                        "Build",
+                        [("0", cv::object([("release", cv::bool(true, "--release"))]))],
+                    ),
                 ),
             ]),
         );

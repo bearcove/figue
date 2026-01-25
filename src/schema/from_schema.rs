@@ -364,13 +364,25 @@ fn short_from_field(field: &Field) -> Option<char> {
 
 fn variant_fields_for_schema(variant: &Variant) -> &'static [Field] {
     let fields = variant.data.fields;
-    if variant.data.kind == StructKind::TupleStruct && fields.len() == 1 {
+    if is_flattened_tuple_variant(variant) {
         let inner_shape = fields[0].shape();
         if let Type::User(UserType::Struct(struct_type)) = inner_shape.ty {
             return struct_type.fields;
         }
     }
     fields
+}
+
+/// Check if this variant is a tuple variant with a single struct field that gets flattened.
+/// E.g., `Bench(BenchArgs)` where `BenchArgs` is a struct.
+fn is_flattened_tuple_variant(variant: &Variant) -> bool {
+    let fields = variant.data.fields;
+    if variant.data.kind == StructKind::TupleStruct && fields.len() == 1 {
+        let inner_shape = fields[0].shape();
+        matches!(inner_shape.ty, Type::User(UserType::Struct(_)))
+    } else {
+        false
+    }
 }
 
 fn arg_level_from_fields(
@@ -562,17 +574,21 @@ fn arg_level_from_fields_with_prefix(
 
             for variant in enum_type.variants {
                 let name = variant_cli_name(variant);
-                let variant_name = variant.name.to_string();
+                // Use effective_name() for deserialization - this respects #[facet(rename = "...")]
+                // facet-format's find_variant_by_display_name uses effective_name() for matching
+                let variant_name = variant.effective_name().to_string();
                 let docs = docs_from_lines(variant.doc);
                 let variant_fields = variant_fields_for_schema(variant);
                 let variant_ctx = SchemaErrorContext::root(enum_shape).with_variant(name.clone());
                 let args_schema = arg_level_from_fields(variant_fields, &variant_ctx)?;
+                let is_flattened_tuple = is_flattened_tuple_variant(variant);
 
                 let sub = Subcommand {
                     name: name.clone(),
                     variant_name,
                     docs,
                     args: args_schema,
+                    is_flattened_tuple,
                     shape: enum_shape,
                 };
 

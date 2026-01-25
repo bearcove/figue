@@ -64,6 +64,18 @@ pub(crate) fn coerce_types_from_shape(
         "coerce_types_from_shape: entering"
     );
 
+    // If target is a Vec/List but value is not an array, wrap it
+    // (but not for Option<T> which also has shape.inner)
+    if matches!(shape.def, facet_core::Def::List(_)) && !matches!(value, ConfigValue::Array(_)) {
+        let element_shape = shape.inner.unwrap();
+        let coerced_element = coerce_types_from_shape(value, element_shape);
+        return ConfigValue::Array(Sourced {
+            value: vec![coerced_element],
+            span: None,
+            provenance: None,
+        });
+    }
+
     match value {
         ConfigValue::Object(sourced) => {
             let mut new_map = sourced.value.clone();

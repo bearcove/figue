@@ -179,6 +179,10 @@ pub struct Subcommand {
     /// Arguments for this subcommand level.
     args: ArgLevelSchema,
 
+    /// Whether this is a tuple variant with a flattened struct (e.g., `Bench(BenchArgs)`).
+    /// When true, the parsed fields need to be wrapped in a "0" field for facet deserialization.
+    is_flattened_tuple: bool,
+
     /// Underlying enum variant shape (kept for defaults / validation).
     #[facet(skip)]
     shape: &'static Shape,
@@ -469,6 +473,12 @@ impl Subcommand {
     /// Get the arguments schema for this subcommand.
     pub fn args(&self) -> &ArgLevelSchema {
         &self.args
+    }
+
+    /// Check if this is a tuple variant with a flattened struct.
+    /// When true, parsed fields need to be wrapped in a "0" field for deserialization.
+    pub fn is_flattened_tuple(&self) -> bool {
+        self.is_flattened_tuple
     }
 }
 
