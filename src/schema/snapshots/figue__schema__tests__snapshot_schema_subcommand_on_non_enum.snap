@@ -1,6 +1,5 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 164
 expression: stripped
 ---
 Error: field `value` marked as subcommand must be an enum

@@ -193,3 +193,139 @@ fn snapshot_schema_conflicting_short_flags() {
 fn snapshot_schema_bad_config_field() {
     assert_schema_snapshot!(Schema::from_shape(BadConfigField::SHAPE));
 }
+
+// ============================================================================
+// Flatten tests
+// ============================================================================
+
+/// Common args that can be flattened into other structs.
+#[derive(Facet)]
+struct CommonArgs {
+    #[facet(args::named, args::short = 'v')]
+    verbose: bool,
+    #[facet(args::named, args::short = 'q')]
+    quiet: bool,
+}
+
+/// Args struct that flattens CommonArgs.
+#[derive(Facet)]
+struct ArgsWithFlatten {
+    #[facet(args::positional)]
+    input: String,
+    #[facet(flatten)]
+    common: CommonArgs,
+}
+
+#[test]
+fn test_flatten_schema_builds() {
+    let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).expect("schema should build");
+
+    // The flattened args should appear at top level
+    let args = schema.args();
+    assert!(
+        args.args.contains_key("verbose"),
+        "verbose should be in args"
+    );
+    assert!(args.args.contains_key("quiet"), "quiet should be in args");
+    assert!(args.args.contains_key("input"), "input should be in args");
+}
+
+#[test]
+fn test_flatten_target_path() {
+    let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).expect("schema should build");
+    let args = schema.args();
+
+    // input is not flattened, so target_path should be ["input"]
+    let input_arg = args.args.get("input").expect("input should exist");
+    assert_eq!(input_arg.target_path, vec!["input".to_string()]);
+
+    // verbose is flattened from common, so target_path should be ["common", "verbose"]
+    let verbose_arg = args.args.get("verbose").expect("verbose should exist");
+    assert_eq!(
+        verbose_arg.target_path,
+        vec!["common".to_string(), "verbose".to_string()]
+    );
+
+    // quiet is flattened from common, so target_path should be ["common", "quiet"]
+    let quiet_arg = args.args.get("quiet").expect("quiet should exist");
+    assert_eq!(
+        quiet_arg.target_path,
+        vec!["common".to_string(), "quiet".to_string()]
+    );
+}
+
+/// Nested flattening test structs
+#[derive(Facet)]
+struct OutputArgs {
+    #[facet(args::named, args::short = 'f')]
+    format: Option<String>,
+}
+
+#[derive(Facet)]
+struct ExtendedCommonArgs {
+    #[facet(flatten)]
+    common: CommonArgs,
+    #[facet(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Facet)]
+struct ArgsWithNestedFlatten {
+    #[facet(args::positional)]
+    input: String,
+    #[facet(flatten)]
+    extended: ExtendedCommonArgs,
+}
+
+#[test]
+fn test_flatten_nested_target_path() {
+    let schema = Schema::from_shape(ArgsWithNestedFlatten::SHAPE).expect("schema should build");
+    let args = schema.args();
+
+    // input is not flattened
+    let input_arg = args.args.get("input").expect("input should exist");
+    assert_eq!(input_arg.target_path, vec!["input".to_string()]);
+
+    // verbose is nested: extended.common.verbose
+    let verbose_arg = args.args.get("verbose").expect("verbose should exist");
+    assert_eq!(
+        verbose_arg.target_path,
+        vec![
+            "extended".to_string(),
+            "common".to_string(),
+            "verbose".to_string()
+        ]
+    );
+
+    // format is nested: extended.output.format
+    let format_arg = args.args.get("format").expect("format should exist");
+    assert_eq!(
+        format_arg.target_path,
+        vec![
+            "extended".to_string(),
+            "output".to_string(),
+            "format".to_string()
+        ]
+    );
+}
+
+/// Test conflicting flags from flatten
+#[derive(Facet)]
+struct ConflictingFlattenArgs {
+    #[facet(args::named, args::short = 'v')]
+    version: bool,
+    #[facet(flatten)]
+    common: CommonArgs, // CommonArgs also has -v for verbose
+}
+
+#[test]
+fn test_flatten_conflict_detected() {
+    let result = Schema::from_shape(ConflictingFlattenArgs::SHAPE);
+    assert!(result.is_err(), "should detect duplicate -v flag");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("duplicate") || err.contains("-v"),
+        "error should mention duplicate: {}",
+        err
+    );
+}

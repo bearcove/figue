@@ -1,9 +1,9 @@
 //! Configuration value with span tracking throughout the tree.
 #![allow(dead_code)]
 
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::string::String;
+use std::sync::Arc;
+use std::vec::Vec;
 
 use facet::Facet;
 use facet_reflect::Span;
@@ -157,8 +157,8 @@ pub(crate) fn insert_nested_value(
     parts: &[&str],
     value: ConfigValue,
 ) {
-    use alloc::string::ToString;
     use indexmap::IndexMap;
+    use std::string::ToString;
 
     if parts.is_empty() {
         return;

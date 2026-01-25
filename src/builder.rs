@@ -5,10 +5,10 @@
 #![allow(deprecated)]
 #![allow(private_interfaces)]
 
-use core::marker::PhantomData;
+use std::marker::PhantomData;
 
-use alloc::string::String;
-use alloc::vec::Vec;
+use std::string::String;
+use std::vec::Vec;
 
 use camino::Utf8PathBuf;
 use facet::Facet;

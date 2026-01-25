@@ -77,7 +77,11 @@ impl Schema {
             None
         };
 
-        Ok(Schema { args, config })
+        Ok(Schema {
+            args,
+            config,
+            special: Default::default(),
+        })
     }
 }
 
@@ -240,7 +244,15 @@ fn config_struct_schema_from_shape(
         let docs = docs_from_lines(field.doc);
         let field_ctx = ctx.with_field(field.name);
         let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
-        fields_map.insert(field.name.to_string(), ConfigFieldSchema { docs, value });
+        let target_path = vec![field.name.to_string()];
+        fields_map.insert(
+            field.name.to_string(),
+            ConfigFieldSchema {
+                docs,
+                value,
+                target_path,
+            },
+        );
     }
 
     Ok(ConfigStructSchema {
@@ -278,6 +290,14 @@ fn arg_level_from_fields(
     fields: &'static [Field],
     ctx: &SchemaErrorContext,
 ) -> Result<ArgLevelSchema, SchemaError> {
+    arg_level_from_fields_with_prefix(fields, ctx, Vec::new())
+}
+
+fn arg_level_from_fields_with_prefix(
+    fields: &'static [Field],
+    ctx: &SchemaErrorContext,
+    path_prefix: Vec<String>,
+) -> Result<ArgLevelSchema, SchemaError> {
     let mut args: IndexMap<String, ArgSchema, RandomState> = IndexMap::default();
     let mut subcommands: IndexMap<String, Subcommand, RandomState> = IndexMap::default();
     let mut subcommand_field_name: Option<String> = None;
@@ -294,6 +314,83 @@ fn arg_level_from_fields(
         }
 
         let field_ctx = ctx.with_field(field.name);
+
+        // Handle flattened fields - recurse into the inner struct
+        if field.is_flattened() {
+            let inner_shape = field.shape();
+            let struct_type = match &inner_shape.ty {
+                Type::User(UserType::Struct(s)) => *s,
+                _ => {
+                    return Err(SchemaError::new(
+                        field_ctx,
+                        format!("flattened field `{}` must be a struct", field.name),
+                    ));
+                }
+            };
+
+            // Build the new path prefix including this field
+            let mut new_prefix = path_prefix.clone();
+            new_prefix.push(field.name.to_string());
+
+            // Recursively process the inner struct's fields
+            let inner =
+                arg_level_from_fields_with_prefix(struct_type.fields, &field_ctx, new_prefix)?;
+
+            // Merge the inner args into our args (checking for conflicts)
+            for (name, arg) in inner.args {
+                if let Some(existing_ctx) = seen_long.get(&name) {
+                    return Err(SchemaError::new(
+                        existing_ctx.clone(),
+                        format!("duplicate flag `--{}` (from flattened field)", name),
+                    )
+                    .with_primary_label("first defined here")
+                    .with_label(field_ctx.clone(), "flattened here"));
+                }
+                seen_long.insert(name.clone(), field_ctx.clone());
+
+                if let ArgKind::Named { short: Some(c), .. } = &arg.kind {
+                    if let Some(existing_ctx) = seen_short.get(c) {
+                        return Err(SchemaError::new(
+                            existing_ctx.clone(),
+                            format!("duplicate flag `-{}` (from flattened field)", c),
+                        )
+                        .with_primary_label("first defined here")
+                        .with_label(field_ctx.clone(), "flattened here"));
+                    }
+                    seen_short.insert(*c, field_ctx.clone());
+                }
+
+                args.insert(name, arg);
+            }
+
+            // Merge subcommands too
+            for (name, sub) in inner.subcommands {
+                if let Some(existing_ctx) = seen_subcommands.get(&name) {
+                    return Err(SchemaError::new(
+                        existing_ctx.clone(),
+                        format!("duplicate subcommand `{}` (from flattened field)", name),
+                    )
+                    .with_primary_label("first defined here")
+                    .with_label(field_ctx.clone(), "flattened here"));
+                }
+                seen_subcommands.insert(name.clone(), field_ctx.clone());
+                subcommands.insert(name, sub);
+            }
+
+            // If the inner level had a subcommand field, propagate it
+            if inner.subcommand_field_name.is_some() {
+                if first_subcommand_field.is_some() {
+                    return Err(SchemaError::new(
+                        field_ctx,
+                        "multiple subcommand fields via flatten",
+                    ));
+                }
+                first_subcommand_field = Some(field_ctx.clone());
+                subcommand_field_name = inner.subcommand_field_name;
+            }
+
+            continue;
+        }
 
         if !has_any_args_attr(field) {
             return Err(SchemaError::new(
@@ -455,6 +552,11 @@ fn arg_level_from_fields(
         }
 
         let docs = docs_from_lines(field.doc);
+
+        // Build target path: prefix + this field's name
+        let mut target_path = path_prefix.clone();
+        target_path.push(field.name.to_string());
+
         let arg = ArgSchema {
             name: field.effective_name().to_string(),
             docs,
@@ -462,6 +564,7 @@ fn arg_level_from_fields(
             value,
             required,
             multiple,
+            target_path,
         };
 
         args.insert(field.effective_name().to_string(), arg);

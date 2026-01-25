@@ -35,9 +35,9 @@
 //! };
 //! ```
 
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::string::String;
+use std::sync::Arc;
+use std::vec::Vec;
 
 use camino::Utf8PathBuf;
 use facet::Facet;

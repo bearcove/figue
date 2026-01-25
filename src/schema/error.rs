@@ -1,4 +1,4 @@
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use facet_core::Shape;

@@ -3,10 +3,10 @@
 //! This module is under active development and not yet wired into the main API.
 #![allow(dead_code)]
 
-use alloc::borrow::Cow;
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::ops::Range;
+use std::borrow::Cow;
+use std::ops::Range;
+use std::string::String;
+use std::vec::Vec;
 
 /// Severity of a diagnostic.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

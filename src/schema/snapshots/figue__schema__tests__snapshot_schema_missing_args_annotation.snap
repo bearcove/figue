@@ -1,6 +1,5 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 154
 expression: stripped
 ---
 Error: field `foo` is missing a #[facet(args::...)] annotation

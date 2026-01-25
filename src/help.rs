@@ -3,11 +3,11 @@
 //! This module provides utilities to generate help text from Facet type metadata,
 //! including doc comments, field names, and attribute information.
 
-use alloc::string::String;
-use alloc::vec::Vec;
 use facet_core::{Def, Facet, Field, Shape, StructKind, Type, UserType, Variant};
 use heck::ToKebabCase;
 use owo_colors::OwoColorize;
+use std::string::String;
+use std::vec::Vec;
 
 use crate::reflection::{is_counted_field, is_supported_counted_type};
 

@@ -1,6 +1,5 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 179
 expression: stripped
 ---
 Error: field `value` uses args::env_prefix without args::config

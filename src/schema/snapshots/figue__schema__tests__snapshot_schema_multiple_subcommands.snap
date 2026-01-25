@@ -1,6 +1,5 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 159
 expression: stripped
 ---
 Error: only one field may be marked with #[facet(args::subcommand)] at this level

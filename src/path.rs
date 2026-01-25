@@ -8,9 +8,9 @@
 //!
 //! Use this for diagnostics and for navigation helpers in `schema` and `config_value`.
 
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::fmt;
+use std::fmt;
+use std::string::String;
+use std::vec::Vec;
 
 /// A path into a schema or ConfigValue tree.
 pub type Path = Vec<String>;

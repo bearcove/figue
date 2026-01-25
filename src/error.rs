@@ -1,10 +1,8 @@
-extern crate alloc;
-
 use crate::span::Span;
-use core::fmt;
 use facet_core::{Field, Shape, Type, UserType, Variant};
 use facet_reflect::ReflectError;
 use heck::ToKebabCase;
+use std::fmt;
 
 /// An args parsing error, with input info, so that it can be formatted nicely
 #[derive(Debug)]
@@ -89,7 +87,7 @@ pub enum ArgsErrorKind {
     /// help text when the user explicitly requests it.
     HelpRequested {
         /// The generated help text
-        help_text: alloc::string::String,
+        help_text: String,
     },
 
     /// Did not expect a positional argument at this position
@@ -365,7 +363,7 @@ impl ArgsErrorKind {
 fn format_two_column_list(
     items: impl IntoIterator<Item = (String, Option<&'static str>)>,
 ) -> String {
-    use core::fmt::Write;
+    use std::fmt::Write;
 
     let items: Vec<_> = items.into_iter().collect();
 
@@ -591,9 +589,9 @@ pub(crate) const fn get_variants_from_shape(shape: &'static Shape) -> &'static [
 
 mod ariadne_impl {
     use super::*;
-    use alloc::borrow::Cow;
     use ariadne::{Color, Label, Report, ReportKind, Source};
     use facet_pretty::{PathSegment, format_shape_with_spans};
+    use std::borrow::Cow;
 
     impl ArgsErrorWithInput {
         /// Returns an Ariadne report builder for this error.

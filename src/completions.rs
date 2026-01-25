@@ -3,10 +3,10 @@
 //! This module generates completion scripts for various shells (bash, zsh, fish)
 //! based on Facet type metadata.
 
-use alloc::string::String;
-use alloc::vec::Vec;
 use facet_core::{Def, Facet, Field, Shape, Type, UserType, Variant};
 use heck::ToKebabCase;
+use std::string::String;
+use std::vec::Vec;
 
 /// Supported shells for completion generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

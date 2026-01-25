@@ -18,7 +18,7 @@
 //! When a value from a higher-priority layer overrides a lower-priority one,
 //! the override is recorded in the returned [`MergeResult`].
 
-use alloc::vec::Vec;
+use std::vec::Vec;
 
 use indexmap::IndexMap;
 
@@ -166,7 +166,7 @@ fn get_provenance(value: &ConfigValue) -> Option<&Provenance> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::sync::Arc;
+    use std::sync::Arc;
 
     use crate::provenance::ConfigFile;
 

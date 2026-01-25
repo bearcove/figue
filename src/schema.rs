@@ -27,7 +27,7 @@ pub(crate) mod from_schema;
 ///   config: SomeConfigStruct,
 /// }
 /// ```
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct Schema {
     /// Top-level arguments: `--verbose`, etc.
@@ -35,10 +35,33 @@ pub struct Schema {
 
     /// Optional config, read from config file, environment
     config: Option<ConfigStructSchema>,
+
+    /// Special fields that trigger early exit behavior.
+    special: SpecialFields,
+}
+
+/// Fields marked with special attributes that trigger early exit behavior.
+///
+/// These fields are detected during schema building and checked after CLI parsing
+/// to short-circuit before full deserialization.
+#[derive(Facet, Default, Debug)]
+#[facet(skip_all_unless_truthy)]
+pub struct SpecialFields {
+    /// Field path for `#[facet(figue::help)]` - when true, show help and exit 0.
+    /// The field should be a `bool`.
+    pub help: Option<String>,
+
+    /// Field path for `#[facet(figue::completions)]` - when set, generate completions and exit 0.
+    /// The field should be `Option<Shell>`.
+    pub completions: Option<String>,
+
+    /// Field path for `#[facet(figue::version)]` - when true, show version and exit 0.
+    /// The field should be a `bool`.
+    pub version: Option<String>,
 }
 
 /// Schema for one "level" of arguments: top-level, a subcommand, a subcommand's subcommand etc.
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct ArgLevelSchema {
     /// Any valid arguments at this level, `--verbose` etc.
@@ -53,7 +76,7 @@ pub struct ArgLevelSchema {
 }
 
 /// Schema for the `config` part of the schema
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct ConfigStructSchema {
     /// Name of the field in the parent struct (e.g., "config" for `#[facet(args::config)] config: ServerConfig`).
@@ -68,9 +91,8 @@ pub struct ConfigStructSchema {
     fields: IndexMap<String, ConfigFieldSchema, RandomState>,
 }
 
-#[derive(Facet)]
+#[derive(Facet, Debug, Default)]
 #[facet(skip_all_unless_truthy)]
-#[derive(Default)]
 pub struct Docs {
     /// Short summary / first line.
     summary: Option<String>,
@@ -78,7 +100,7 @@ pub struct Docs {
     details: Option<String>,
 }
 
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[repr(u8)]
 pub enum ScalarType {
     Bool,
@@ -87,7 +109,7 @@ pub enum ScalarType {
     Float,
 }
 
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 #[repr(u8)]
 pub enum LeafKind {
@@ -97,7 +119,7 @@ pub enum LeafKind {
     Enum { variants: Vec<String> },
 }
 
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct LeafSchema {
     /// What kind of leaf value this is.
@@ -107,7 +129,7 @@ pub struct LeafSchema {
     shape: &'static Shape,
 }
 
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 #[repr(u8)]
 pub enum ValueSchema {
@@ -134,7 +156,7 @@ pub enum ValueSchema {
 }
 
 /// Schema for a subcommand
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct Subcommand {
     /// Subcommand name (kebab-case or rename).
@@ -153,7 +175,7 @@ pub struct Subcommand {
 }
 
 /// Schema for a singular argument
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct ArgSchema {
     /// Argument name / effective name (rename or field name).
@@ -176,10 +198,17 @@ pub struct ArgSchema {
     /// Whether the argument can appear multiple times on the CLI.
     /// True for list-like values and counted flags.
     multiple: bool,
+
+    /// Target path in the struct for this argument's value.
+    ///
+    /// For non-flattened fields, this is just `["field_name"]`.
+    /// For flattened fields, this includes the path through the flattened structs,
+    /// e.g., `["common", "verbose"]` for a `verbose` field inside a flattened `common: CommonArgs`.
+    target_path: Path,
 }
 
 /// A kind of argument
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 #[repr(u8)]
 pub enum ArgKind {
@@ -193,7 +222,7 @@ pub enum ArgKind {
 }
 
 /// Schema for the 'config' field of the top-level args struct
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct ConfigFieldSchema {
     /// Doc comments for a field
@@ -201,10 +230,16 @@ pub struct ConfigFieldSchema {
 
     /// Value schema for a field
     pub value: ConfigValueSchema,
+
+    /// Target path in the struct for this field's value.
+    ///
+    /// For non-flattened fields, this is just `["field_name"]`.
+    /// For flattened fields, this includes the path through the flattened structs.
+    target_path: Path,
 }
 
 /// Schema for a vec in a config value
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct ConfigVecSchema {
     /// Shape of the vector/list.
@@ -215,7 +250,7 @@ pub struct ConfigVecSchema {
 }
 
 /// Schema for a value in the config struct
-#[derive(Facet)]
+#[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 #[repr(u8)]
 pub enum ConfigValueSchema {

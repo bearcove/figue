@@ -1,36 +1,33 @@
 //! Driver API for orchestrating layered configuration parsing, validation, and diagnostics.
 //!
-//! This module is under active development and not yet wired into the main API.
+//! # Phases
+//! 1. **Parse layers**: CLI, env, file (defaults filled during deserialization)
+//! 2. **Merge** layers by priority (CLI > env > file > defaults)
+//! 3. **Deserialize** merged ConfigValue into the target Facet type
+//!
+//! # TODO
+//! - [x] Wire override tracking from merge result into DriverReport
+//! - [x] Define DriverError enum (Failed, Help, Completions, Version)
+//! - [x] Implement expect_value() on DriverResult
+//! - [ ] Add figue::help, figue::completions, figue::version attribute detection
+//! - [ ] Collect unused keys from layer parsers into LayerOutput
+//! - [ ] Add facet-validate pass after deserialization
+//! - [ ] Improve render_pretty() with Ariadne integration
+//! - [ ] Migrate build_traced tests to driver API
 #![allow(dead_code)]
 #![allow(clippy::result_large_err)]
-//!
-//! # Phases (planned)
-//! 1. **Parse layers** using the schema:
-//!    - CLI, env, file, defaults
-//!    - collect `ConfigValue` trees + unknown keys + layer-specific diagnostics
-//! 2. **Merge** layers by priority (CLI > env > file > defaults).
-//! 3. **Validate**:
-//!    - missing required keys
-//!    - type coercion
-//!    - deserialize into the target Facet type
-//!    - facet-validate pass (if enabled)
-//! 4. **Report**:
-//!    - collect all diagnostics
-//!    - render with pretty formatting (Ariadne + facet-pretty spans)
-//!
-//! This module is intentionally a skeleton for now. It defines the API surface
-//! and types we want to stabilize while moving orchestration out of `builder`.
 
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::marker::PhantomData;
+use std::marker::PhantomData;
+use std::string::String;
+use std::vec::Vec;
 
 use crate::builder::Config;
 use crate::config_value::ConfigValue;
+use crate::config_value_parser::from_config_value;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
 use crate::path::Path;
-use crate::provenance::{FileResolution, Provenance};
+use crate::provenance::{FileResolution, Override, Provenance};
 use crate::span::Span;
 use facet_core::Facet;
 
@@ -140,11 +137,12 @@ impl<T: Facet<'static>> Driver<T> {
             .iter()
             .any(|d| d.severity == Severity::Error);
         if has_errors {
-            return Err(DriverError {
+            return Err(DriverError::Failed {
                 report: DriverReport {
                     diagnostics: all_diagnostics,
                     layers,
                     file_resolution,
+                    overrides: Vec::new(),
                 },
             });
         }
@@ -160,33 +158,43 @@ impl<T: Facet<'static>> Driver<T> {
         .flatten()
         .collect();
 
-        let merge_result = merge_layers(values_to_merge);
+        let merged = merge_layers(values_to_merge);
+        let overrides = merged.overrides;
 
-        // Phase 3: TODO - Validate and deserialize into T
-        // For now, we'll just return a placeholder error since we can't
-        // actually deserialize without more infrastructure
-        // This will be implemented when we add the deserialization step
+        // Phase 3: Deserialize into T
+        let value: T = match from_config_value(&merged.value) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(DriverError::Failed {
+                    report: DriverReport {
+                        diagnostics: vec![Diagnostic {
+                            message: format!("Deserialization failed: {}", e),
+                            path: None,
+                            span: None,
+                            severity: Severity::Error,
+                        }],
+                        layers,
+                        file_resolution,
+                        overrides,
+                    },
+                });
+            }
+        };
 
-        // For now, return an error indicating this is not yet fully implemented
-        // TODO: Implement deserialization from ConfigValue to T
-        let _ = merge_result;
-
-        Err(DriverError {
+        Ok(DriverOutput {
+            value,
             report: DriverReport {
-                diagnostics: vec![Diagnostic {
-                    message: String::from(
-                        "Driver deserialization not yet implemented - use build_traced() for now",
-                    ),
-                    path: None,
-                    span: None,
-                    severity: Severity::Error,
-                }],
+                diagnostics: all_diagnostics,
                 layers,
                 file_resolution,
+                overrides,
             },
         })
     }
 }
+
+/// Result type for driver operations.
+pub type DriverResult<T> = Result<DriverOutput<T>, DriverError>;
 
 /// Successful driver output: a typed value plus an execution report.
 #[derive(Debug)]
@@ -195,6 +203,67 @@ pub struct DriverOutput<T> {
     pub value: T,
     /// Diagnostics and metadata produced by the driver.
     pub report: DriverReport,
+}
+
+impl<T> DriverOutput<T> {
+    /// Get the value, printing any warnings to stderr.
+    pub fn get(self) -> T {
+        self.print_warnings();
+        self.value
+    }
+
+    /// Get the value silently (no warning output).
+    pub fn get_silent(self) -> T {
+        self.value
+    }
+
+    /// Get value and report separately.
+    pub fn into_parts(self) -> (T, DriverReport) {
+        (self.value, self.report)
+    }
+
+    /// Print any warnings to stderr.
+    pub fn print_warnings(&self) {
+        for diagnostic in &self.report.diagnostics {
+            if diagnostic.severity == Severity::Warning {
+                eprintln!("{}: {}", diagnostic.severity.as_str(), diagnostic.message);
+            }
+        }
+    }
+}
+
+/// Extension trait for `DriverResult` to handle common exit patterns.
+pub trait DriverResultExt<T> {
+    /// Get the value, or print output and exit.
+    ///
+    /// - On success: prints warnings to stderr, returns value
+    /// - On help/completions/version: prints to stdout, exits 0
+    /// - On error: prints diagnostics to stderr, exits 1
+    fn expect_value(self) -> T;
+}
+
+impl<T> DriverResultExt<T> for DriverResult<T> {
+    fn expect_value(self) -> T {
+        match self {
+            Ok(output) => output.get(),
+            Err(DriverError::Help { text }) => {
+                println!("{}", text);
+                std::process::exit(0);
+            }
+            Err(DriverError::Completions { script }) => {
+                println!("{}", script);
+                std::process::exit(0);
+            }
+            Err(DriverError::Version { text }) => {
+                println!("{}", text);
+                std::process::exit(0);
+            }
+            Err(DriverError::Failed { report }) => {
+                eprintln!("{}", report.render_pretty());
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 /// Full report of the driver execution.
@@ -209,6 +278,8 @@ pub struct DriverReport {
     pub layers: ConfigLayers,
     /// File resolution metadata (paths tried, picked, etc).
     pub file_resolution: Option<FileResolution>,
+    /// Records of values that were overridden during merge.
+    pub overrides: Vec<Override>,
 }
 
 impl DriverReport {
@@ -264,23 +335,66 @@ impl Severity {
 
 /// Error returned by the driver.
 ///
-/// This is a wrapper around a report; both Display and Debug should render
-/// the full diagnostics.
-pub struct DriverError {
-    /// Report that can be rendered for the user.
-    pub report: DriverReport,
+/// Not all variants are "errors" in the traditional sense - Help, Completions,
+/// and Version are successful operations that just don't produce a config value.
+pub enum DriverError {
+    /// Parsing or validation failed - exit code 1
+    Failed {
+        /// Report containing all diagnostics
+        report: DriverReport,
+    },
+
+    /// Help was requested (via `#[facet(figue::help)]` field) - exit code 0
+    Help {
+        /// Formatted help text
+        text: String,
+    },
+
+    /// Shell completions were requested (via `#[facet(figue::completions)]` field) - exit code 0
+    Completions {
+        /// Generated completion script
+        script: String,
+    },
+
+    /// Version was requested (via `#[facet(figue::version)]` field) - exit code 0
+    Version {
+        /// Version string
+        text: String,
+    },
 }
 
-impl core::fmt::Display for DriverError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.report.render_pretty())
+impl DriverError {
+    /// Returns the appropriate exit code for this error.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            DriverError::Failed { .. } => 1,
+            DriverError::Help { .. } => 0,
+            DriverError::Completions { .. } => 0,
+            DriverError::Version { .. } => 0,
+        }
+    }
+
+    /// Returns true if this is a "success" error (help, completions, version).
+    pub fn is_success(&self) -> bool {
+        self.exit_code() == 0
     }
 }
 
-impl core::fmt::Debug for DriverError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(self, f)
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DriverError::Failed { report } => write!(f, "{}", report.render_pretty()),
+            DriverError::Help { text } => write!(f, "{}", text),
+            DriverError::Completions { script } => write!(f, "{}", script),
+            DriverError::Version { text } => write!(f, "{}", text),
+        }
     }
 }
 
-impl core::error::Error for DriverError {}
+impl std::fmt::Debug for DriverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for DriverError {}

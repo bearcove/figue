@@ -36,9 +36,9 @@
 //! - All SCREAMING_SNAKE_CASE
 //! - Double underscore (`__`) as separator (to allow single `_` in field names)
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use std::hash::RandomState;
+use std::string::{String, ToString};
+use std::vec::Vec;
 
 use indexmap::IndexMap;
 

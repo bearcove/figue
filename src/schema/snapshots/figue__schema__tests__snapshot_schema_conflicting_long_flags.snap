@@ -1,18 +1,17 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 189
 expression: stripped
 ---
-Error: duplicate flag `-v`
+Error: duplicate flag `--dup`
    ╭─[ <unknown>:4:5 ]
    │
- 2 │ struct ConflictingShortFlags {
-   │        ──────────┬──────────  
-   │                  ╰──────────── defined at src/schema/tests.rs:122
+ 2 │ struct ConflictingLongFlags {
+   │        ──────────┬─────────  
+   │                  ╰─────────── defined at src/schema/tests.rs:114
    │ 
  4 │     a: bool,
    │     ───┬───  
-   │        ╰───── `-v` first defined here
+   │        ╰───── `--dup` first defined here
    │ 
  6 │     b: bool,
    │     ───┬───  

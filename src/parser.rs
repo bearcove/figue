@@ -5,10 +5,10 @@ use crate::{
     reflection::{is_counted_field, is_supported_counted_type},
     span::Span,
 };
-use alloc::collections::BTreeMap;
 use facet_core::{Def, EnumType, Facet, Field, Shape, StructKind, Type, UserType, Variant};
 use facet_reflect::{HeapValue, Partial};
 use heck::{ToKebabCase, ToSnakeCase};
+use std::collections::BTreeMap;
 
 /// Check if the given argument is a help flag
 fn is_help_flag(arg: &str) -> bool {

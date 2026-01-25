@@ -4,7 +4,7 @@
 //! This allows us to deserialize `ConfigValue` into arbitrary Facet types using the
 //! standard `facet-format` deserializer infrastructure.
 
-use alloc::vec::Vec;
+use std::vec::Vec;
 
 use facet_core::{Facet, Shape, Type, UserType};
 use facet_format::{
@@ -257,7 +257,7 @@ fn create_missing_marker(
 fn serialize_default_to_config_value(
     default_source: &facet_core::DefaultSource,
     shape: &'static facet_core::Shape,
-) -> Result<ConfigValue, alloc::string::String> {
+) -> Result<ConfigValue, String> {
     use facet_core::{DefaultSource, TypeOps};
 
     // Allocate space for the default value
@@ -270,12 +270,12 @@ fn serialize_default_to_config_value(
             // Get default_in_place from type_ops
             let type_ops = shape
                 .type_ops
-                .ok_or_else(|| alloc::format!("Shape {} has no type_ops", shape.type_identifier))?;
+                .ok_or_else(|| format!("Shape {} has no type_ops", shape.type_identifier))?;
 
             match type_ops {
                 TypeOps::Direct(ops) => {
                     let default_fn = ops.default_in_place.ok_or_else(|| {
-                        alloc::format!("Shape {} has no default function", shape.type_identifier)
+                        format!("Shape {} has no default function", shape.type_identifier)
                     })?;
                     // Direct ops default: unsafe fn(*mut ()) - initializes in place, no return value
                     unsafe { (default_fn)(ptr) };
@@ -305,7 +305,7 @@ fn serialize_default_to_config_value(
     // Serialize to ConfigValue using our serializer
     let mut serializer = ConfigValueSerializer::new();
     facet_format::serialize_root(&mut serializer, peek)
-        .map_err(|e| alloc::format!("Serialization failed: {:?}", e))?;
+        .map_err(|e| format!("Serialization failed: {:?}", e))?;
 
     Ok(serializer.finish())
 }
@@ -363,7 +363,7 @@ impl<'input> ConfigValueParser<'input> {
     /// Create a new parser from a `ConfigValue`.
     pub fn new(value: &'input ConfigValue, _target_shape: &'static Shape) -> Self {
         Self {
-            stack: alloc::vec![StackFrame::Value(value)],
+            stack: vec![StackFrame::Value(value)],
             last_span: None,
             peeked: None,
         }
@@ -508,7 +508,7 @@ impl<'input> ConfigValueParser<'input> {
             ConfigValue::String(sourced) => {
                 self.update_span(sourced);
                 Ok(ParseEvent::Scalar(ScalarValue::Str(
-                    alloc::borrow::Cow::Borrowed(&sourced.value),
+                    std::borrow::Cow::Borrowed(&sourced.value),
                 )))
             }
             ConfigValue::Array(sourced) => {
@@ -555,7 +555,7 @@ impl<'input> ConfigValueParser<'input> {
             }
             ConfigValue::Missing(info) => {
                 // Missing values cannot be deserialized - they're error markers
-                Err(ConfigValueParseError::Message(alloc::format!(
+                Err(ConfigValueParseError::Message(format!(
                     "Required field '{}' is missing",
                     info.field_path
                 )))
@@ -568,7 +568,7 @@ impl<'input> ConfigValueParser<'input> {
 #[derive(Debug)]
 pub enum ConfigValueParseError {
     /// Generic error message.
-    Message(alloc::string::String),
+    Message(String),
 }
 
 impl core::fmt::Display for ConfigValueParseError {
@@ -589,7 +589,7 @@ pub struct ConfigValueSerializer {
 impl Default for ConfigValueSerializer {
     fn default() -> Self {
         Self {
-            stack: alloc::vec![BuildFrame::Root(None)],
+            stack: vec![BuildFrame::Root(None)],
         }
     }
 }
@@ -597,14 +597,14 @@ impl Default for ConfigValueSerializer {
 enum BuildFrame {
     Root(Option<ConfigValue>),
     Object {
-        map: IndexMap<alloc::string::String, ConfigValue, std::hash::RandomState>,
+        map: IndexMap<String, ConfigValue, std::hash::RandomState>,
     },
     Array {
         items: Vec<ConfigValue>,
     },
     PendingField {
-        map: IndexMap<alloc::string::String, ConfigValue, std::hash::RandomState>,
-        key: alloc::string::String,
+        map: IndexMap<String, ConfigValue, std::hash::RandomState>,
+        key: String,
     },
 }
 
@@ -630,7 +630,7 @@ impl ConfigValueSerializer {
         }
     }
 
-    fn attach_value(&mut self, value: ConfigValue) -> Result<(), alloc::string::String> {
+    fn attach_value(&mut self, value: ConfigValue) -> Result<(), String> {
         let parent = self.stack.pop().ok_or("Stack underflow")?;
         match parent {
             BuildFrame::Root(None) => {
@@ -656,7 +656,7 @@ impl ConfigValueSerializer {
 }
 
 impl facet_format::FormatSerializer for ConfigValueSerializer {
-    type Error = alloc::string::String;
+    type Error = String;
 
     fn begin_struct(&mut self) -> Result<(), Self::Error> {
         self.stack.push(BuildFrame::Object {
@@ -775,7 +775,7 @@ impl facet_format::FormatSerializer for ConfigValueSerializer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
+    use std::string::ToString;
 
     #[test]
     fn test_parse_null() {
@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_array() {
-        let value = ConfigValue::Array(Sourced::new(alloc::vec![]));
+        let value = ConfigValue::Array(Sourced::new(vec![]));
         let mut parser = ConfigValueParser::new(&value, <Vec<i32>>::SHAPE);
 
         // Should emit SequenceStart, then SequenceEnd
@@ -847,7 +847,7 @@ mod tests {
 
     #[test]
     fn test_parse_array_with_items() {
-        let value = ConfigValue::Array(Sourced::new(alloc::vec![
+        let value = ConfigValue::Array(Sourced::new(vec![
             ConfigValue::Integer(Sourced::new(1)),
             ConfigValue::Integer(Sourced::new(2)),
             ConfigValue::Integer(Sourced::new(3)),
@@ -978,7 +978,7 @@ mod tests {
 
         #[derive(Debug, Facet, PartialEq)]
         struct SmtpConfig {
-            host: alloc::string::String,
+            host: String,
             port: i64,
         }
 

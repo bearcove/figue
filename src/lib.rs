@@ -1,13 +1,10 @@
 #![warn(missing_docs)]
-#![warn(clippy::std_instead_of_core)]
-#![warn(clippy::std_instead_of_alloc)]
 #![deny(unsafe_code)]
 #![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 // Allow deprecated during transition to new driver-based API
 #![allow(deprecated)]
 #![doc = include_str!("../README.md")]
 
-extern crate alloc;
 extern crate self as figue;
 
 pub(crate) mod arg;

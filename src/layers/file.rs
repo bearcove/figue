@@ -24,10 +24,10 @@
 //! let output = parse_file(&schema, &config)?;
 //! ```
 
-use alloc::boxed::Box;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::boxed::Box;
+use std::string::{String, ToString};
+use std::sync::Arc;
+use std::vec::Vec;
 
 use camino::{Utf8Path, Utf8PathBuf};
 

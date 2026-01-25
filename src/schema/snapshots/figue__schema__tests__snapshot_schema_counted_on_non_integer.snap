@@ -1,6 +1,5 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 169
 expression: stripped
 ---
 Error: field `value` marked as counted must be an integer

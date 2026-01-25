@@ -9,9 +9,9 @@
 //! - Does NOT set defaults (that's the driver's job)
 //! - Reports errors properly (no silent skipping)
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use std::hash::RandomState;
+use std::string::{String, ToString};
+use std::vec::Vec;
 
 use heck::{ToKebabCase, ToSnakeCase};
 use indexmap::IndexMap;

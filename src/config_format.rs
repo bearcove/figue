@@ -18,7 +18,7 @@
 //! let config = format.parse(r#"{"port": 8080}"#)?;
 //! ```
 
-use alloc::string::String;
+use std::string::String;
 
 use facet::Facet;
 

@@ -1,6 +1,5 @@
 ---
 source: src/schema/tests.rs
-assertion_line: 144
 expression: "facet_json :: to_string_pretty(& value).unwrap()"
 ---
 {
@@ -22,7 +21,10 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
               "Scalar": "Bool"
             }
           }
-        }
+        },
+        "target_path": [
+          "verbose"
+        ]
       },
       "input": {
         "name": "input",
@@ -37,7 +39,10 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
             }
           }
         },
-        "required": true
+        "required": true,
+        "target_path": [
+          "input"
+        ]
       },
       "include": {
         "name": "include",
@@ -59,7 +64,10 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
           }
         },
         "required": true,
-        "multiple": true
+        "multiple": true,
+        "target_path": [
+          "include"
+        ]
       },
       "quiet": {
         "name": "quiet",
@@ -79,7 +87,10 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
             }
           }
         },
-        "multiple": true
+        "multiple": true,
+        "target_path": [
+          "quiet"
+        ]
       }
     },
     "subcommands": {
@@ -106,7 +117,10 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
                     "Scalar": "Bool"
                   }
                 }
-              }
+              },
+              "target_path": [
+                "release"
+              ]
             }
           },
           "subcommands": {}
@@ -136,7 +150,10 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
               "Scalar": "String"
             }
           }
-        }
+        },
+        "target_path": [
+          "host"
+        ]
       },
       "port": {
         "docs": {},
@@ -146,8 +163,12 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
               "Scalar": "Integer"
             }
           }
-        }
+        },
+        "target_path": [
+          "port"
+        ]
       }
     }
-  }
+  },
+  "special": {}
 }
