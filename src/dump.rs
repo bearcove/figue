@@ -9,9 +9,10 @@ use crate::{
 use facet::Facet;
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
+use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
-/// Dump config with special markers for missing required fields.
+/// Dump config with special markers for missing required fields to stdout.
 #[deprecated(note = "just use dump_config_with_provenance")]
 pub(crate) fn dump_config_with_missing_fields<T: Facet<'static>>(
     value: &ConfigValue,
@@ -19,8 +20,9 @@ pub(crate) fn dump_config_with_missing_fields<T: Facet<'static>>(
     _missing_fields: &[crate::config_value::MissingFieldInfo],
     _env_prefix: &str,
 ) {
-    // Just show the normal dump - it already has header and sources
-    dump_config_with_provenance::<T>(value, file_resolution);
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    dump_config_with_provenance::<T>(&mut handle, value, file_resolution);
 }
 
 #[deprecated(note = "provide a visitor pattern")]
@@ -102,17 +104,17 @@ impl DumpContext {
     }
 }
 
-/// Dump the ConfigValue tree with provenance information from a ConfigResult.
-///
-/// This is useful when using the builder API directly and want to show
-/// the config dump with file resolution info.
+/// Dump the ConfigValue tree with provenance information from a ConfigResult to stdout.
 #[deprecated(note = "just use dump_config_with_provenance")]
 pub(crate) fn dump_config_from_result<T: Facet<'static>>(result: &ConfigResult<ConfigValue>) {
-    dump_config_with_provenance::<T>(&result.value, &result.file_resolution);
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    dump_config_with_provenance::<T>(&mut handle, &result.value, &result.file_resolution);
 }
 
-/// Dump the ConfigValue tree with provenance information.
+/// Dump the ConfigValue tree with provenance information to a writer.
 pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
+    w: &mut impl Write,
     value: &ConfigValue,
     file_resolution: &FileResolution,
 ) {
@@ -120,11 +122,11 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
     let ctx = DumpContext::from_shape::<T>();
 
     // Show sources
-    println!("Sources:");
+    writeln!(w, "Sources:").ok();
 
     // Config files - show resolution info with alignment
     if !file_resolution.paths.is_empty() {
-        println!("  file:");
+        writeln!(w, "  file:").ok();
 
         // Find max path length for alignment
         let max_path_len = file_resolution
@@ -164,24 +166,54 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
                 _ => status_label.dimmed().to_string(),
             };
 
-            println!("    {} {}{} {}", colored_status, colored_path, dots, suffix);
+            writeln!(
+                w,
+                "    {} {}{} {}",
+                colored_status, colored_path, dots, suffix
+            )
+            .ok();
         }
     } else if file_resolution.had_explicit {
-        println!("  file: (none - explicit --config not provided)");
+        writeln!(w, "  file: (none - explicit --config not provided)").ok();
     }
 
     // Environment variables - show actual prefix from shape
     if let Some(env_prefix) = ctx.env_prefix {
-        println!("  env {}", format!("${}__*", env_prefix).yellow());
+        writeln!(w, "  env {}", format!("${}__*", env_prefix).yellow()).ok();
     }
 
     // CLI args - show pattern for config field overrides
-    println!("  cli {}", format!("--{}.*", ctx.config_field_name).cyan());
+    writeln!(
+        w,
+        "  cli {}",
+        format!("--{}.*", ctx.config_field_name).cyan()
+    )
+    .ok();
 
     // Defaults
-    println!("  defaults");
+    writeln!(w, "  defaults").ok();
 
-    println!();
+    writeln!(w).ok();
+
+    // Write the config values
+    let state = write_config_values::<T>(w, value);
+
+    // Show truncation notice if any values were truncated
+    if state.had_truncation {
+        writeln!(w).ok();
+        writeln!(
+            w,
+            "Some values were truncated. To show full values, rerun with {}=1",
+            "FACET_ARGS_BLAST_IT".yellow()
+        )
+        .ok();
+    }
+}
+
+/// Write just the config values (without the Sources header) to a writer.
+/// Returns the DumpState for checking if truncation occurred.
+fn write_config_values<T: Facet<'static>>(w: &mut impl Write, value: &ConfigValue) -> DumpState {
+    let ctx = DumpContext::from_shape::<T>();
 
     // Step 1: Coerce string values to their target types (for env vars)
     let coerced_value = coerce_types_from_shape(value, T::SHAPE);
@@ -228,12 +260,12 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
         }
     }
 
-    // Step 4: Print all lines with proper alignment
+    // Step 4: Write all lines with proper alignment
     for line in &lines {
         let indent_str = "  ".repeat(line.indent);
 
         if line.is_header {
-            println!("{}{}", indent_str, line.key);
+            writeln!(w, "{}{}", indent_str, line.key).ok();
         } else {
             let key_width = visual_width(&line.key);
             let val_width = visual_width(&line.value);
@@ -261,7 +293,8 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
                         } else {
                             String::new()
                         };
-                        println!(
+                        writeln!(
+                            w,
                             "{}{}{}  {}{} {}",
                             indent_str,
                             line.key,
@@ -269,12 +302,13 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
                             wrapped_line,
                             val_padding.bright_black(),
                             line.provenance,
-                        );
+                        )
+                        .ok();
                     } else {
                         // Continuation lines: indent to value column
                         let continuation_indent = indent_str.len() + max_key + 2;
                         let spaces = " ".repeat(continuation_indent);
-                        println!("{}{}", spaces, wrapped_line);
+                        writeln!(w, "{}{}", spaces, wrapped_line).ok();
                     }
                 }
             } else {
@@ -285,7 +319,8 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
                     String::new()
                 };
 
-                println!(
+                writeln!(
+                    w,
                     "{}{}{}  {}{} {}",
                     indent_str,
                     line.key,
@@ -293,21 +328,13 @@ pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
                     line.value,
                     val_padding.bright_black(),
                     line.provenance,
-                );
+                )
+                .ok();
             }
         }
     }
 
-    println!();
-
-    // Show truncation notice if any values were truncated
-    if state.had_truncation {
-        println!();
-        println!(
-            "Some values were truncated. To show full values, rerun with {}=1",
-            "FACET_ARGS_BLAST_IT".yellow()
-        );
-    }
+    state
 }
 
 /// Recursively collect lines to be printed.
@@ -468,9 +495,12 @@ fn collect_dump_lines(
                 collect_dump_lines(val, key, indent + 1, shape, false, lines, ctx, state);
             }
         }
-        ConfigValue::Missing(_info) => {
-            // Show big red MISSING marker
-            let colored_value = "❌ MISSING (required)".red().bold().to_string();
+        ConfigValue::Missing(info) => {
+            // Show big red MISSING marker with type info
+            let colored_value = format!("❌ MISSING <{}>", info.type_name)
+                .red()
+                .bold()
+                .to_string();
             lines.push(DumpLine {
                 indent,
                 key: path.to_string(),
@@ -479,8 +509,17 @@ fn collect_dump_lines(
                 is_header: false,
             });
 
-            // TODO: Add help text showing CLI/env/file options
-            // For now, just mark it as missing - we can enhance this later
+            // Show doc comment as help text if available
+            if let Some(doc) = &info.doc_comment {
+                let help_text = format!("  {}", doc).dimmed().to_string();
+                lines.push(DumpLine {
+                    indent,
+                    key: String::new(),
+                    value: help_text,
+                    provenance: String::new(),
+                    is_header: false,
+                });
+            }
         }
     }
 }
@@ -522,6 +561,7 @@ fn truncate_middle(s: &str, max_length: usize) -> (String, bool) {
 
     (format!("{}...{}", start, end), true)
 }
+
 /// Wrap a value string to fit within max_width, preserving ANSI color codes.
 /// Returns a vector of lines with color codes reapplied to each line.
 fn wrap_value(value: &str, max_width: usize) -> Vec<String> {

@@ -26,7 +26,8 @@ use std::vec::Vec;
 use crate::builder::Config;
 use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
-use crate::config_value_parser::from_config_value;
+use crate::config_value_parser::{fill_defaults_from_shape, from_config_value};
+use crate::dump::{collect_missing_values, dump_config_with_provenance};
 use crate::help::generate_help_for_shape;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
@@ -246,9 +247,46 @@ impl<T: Facet<'static>> Driver<T> {
         let merged = merge_layers(values_to_merge);
         let overrides = merged.overrides;
 
-        // Phase 3: Assign virtual spans and deserialize into T
+        // Phase 3: Fill defaults and check for missing required fields
+        // This must happen BEFORE deserialization so we can show all missing fields at once
+        let value_with_defaults = fill_defaults_from_shape(&merged.value, T::SHAPE);
+
+        // Check for missing required fields
+        let mut missing_fields = Vec::new();
+        collect_missing_values(&value_with_defaults, &mut missing_fields);
+
+        if !missing_fields.is_empty() {
+            // Show dump with missing field markers (includes Sources header)
+            let mut dump_buf = Vec::new();
+            let resolution = file_resolution.as_ref().cloned().unwrap_or_default();
+            dump_config_with_provenance::<T>(&mut dump_buf, &value_with_defaults, &resolution);
+            let dump =
+                String::from_utf8(dump_buf).unwrap_or_else(|_| "error rendering dump".into());
+            let message = format!(
+                "Missing required fields:\n\n{}\nRun with --help for usage information.",
+                dump
+            );
+
+            return Err(DriverError::Failed {
+                report: DriverReport {
+                    diagnostics: vec![Diagnostic {
+                        message,
+                        path: None,
+                        span: None,
+                        severity: Severity::Error,
+                    }],
+                    layers,
+                    file_resolution,
+                    overrides,
+                    cli_args_source,
+                    source_name: "<cli>".to_string(),
+                },
+            });
+        }
+
+        // Phase 4: Assign virtual spans and deserialize into T
         // The span registry maps virtual spans back to real source locations
-        let (value_with_virtual_spans, span_registry) = assign_virtual_spans(&merged.value);
+        let (value_with_virtual_spans, span_registry) = assign_virtual_spans(&value_with_defaults);
 
         let value: T = match from_config_value(&value_with_virtual_spans) {
             Ok(v) => v,
@@ -440,6 +478,20 @@ impl DriverReport {
         };
 
         for diagnostic in &self.diagnostics {
+            // For diagnostics without a span, just print the message directly
+            // (e.g., missing required fields error doesn't point to a specific location)
+            if diagnostic.span.is_none() {
+                let prefix = match diagnostic.severity {
+                    Severity::Error => "Error: ",
+                    Severity::Warning => "Warning: ",
+                    Severity::Note => "Note: ",
+                };
+                output.extend_from_slice(prefix.as_bytes());
+                output.extend_from_slice(diagnostic.message.as_bytes());
+                output.push(b'\n');
+                continue;
+            }
+
             let span = diagnostic
                 .span
                 .map(|s| s.start..(s.start + s.len))
