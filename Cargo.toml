@@ -19,7 +19,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 camino = "1.1"
-facet = { path = "../facet/facet", features = ["indexmap", "camino"] }
+facet = { path = "../facet/facet", features = ["indexmap", "camino", "net"] }
 facet-core = { path = "../facet/facet-core" }
 facet-format = { path = "../facet/facet-format" }
 facet-json = { path = "../facet/facet-json" }

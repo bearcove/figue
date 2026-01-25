@@ -159,7 +159,6 @@ fn get_provenance(value: &ConfigValue) -> Option<&Provenance> {
         ConfigValue::Array(s) => s.provenance.as_ref(),
         ConfigValue::Object(s) => s.provenance.as_ref(),
         ConfigValue::Enum(s) => s.provenance.as_ref(),
-        ConfigValue::Missing(_) => None, // Missing values have no provenance
     }
 }
 

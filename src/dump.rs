@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) fn dump_config_with_missing_fields<T: Facet<'static>>(
     value: &ConfigValue,
     file_resolution: &FileResolution,
-    _missing_fields: &[crate::config_value::MissingFieldInfo],
+    _missing_fields: &[MissingFieldInfo],
     _env_prefix: &str,
 ) {
     let stdout = std::io::stdout();
@@ -25,27 +25,76 @@ pub(crate) fn dump_config_with_missing_fields<T: Facet<'static>>(
     dump_config_with_provenance::<T>(&mut handle, value, file_resolution);
 }
 
-#[deprecated(note = "provide a visitor pattern")]
-pub(crate) fn collect_missing_values(
+/// Collect missing required fields by walking the schema and checking against the ConfigValue.
+/// A field is "missing" if it's not in the ConfigValue AND has no default AND is not Option.
+pub(crate) fn collect_missing_fields(
     value: &ConfigValue,
-    missing: &mut Vec<crate::config_value::MissingFieldInfo>,
+    shape: &'static facet_core::Shape,
+    path_prefix: &str,
+    missing: &mut Vec<MissingFieldInfo>,
 ) {
-    match value {
-        ConfigValue::Missing(info) => {
-            missing.push(info.clone());
-        }
-        ConfigValue::Object(sourced) => {
-            for (_key, val) in &sourced.value {
-                collect_missing_values(val, missing);
+    if let ConfigValue::Object(sourced) = value
+        && let facet_core::Type::User(facet_core::UserType::Struct(s)) = &shape.ty
+    {
+        for field in s.fields {
+            let field_path = if path_prefix.is_empty() {
+                field.name.to_string()
+            } else {
+                format!("{}.{}", path_prefix, field.name)
+            };
+            let field_shape = field.shape.get();
+
+            if let Some(val) = sourced.value.get(field.name) {
+                // Field exists - recurse into nested structs
+                collect_missing_fields(val, field_shape, &field_path, missing);
+            } else {
+                // Field is missing - check if it's required
+                let has_default = field.default.is_some();
+                let is_option = field_shape.type_identifier.contains("Option");
+
+                if !has_default && !is_option {
+                    // Required field without default - it's missing
+                    let doc_comment = if field.doc.is_empty() {
+                        None
+                    } else {
+                        Some(field.doc.join("\n"))
+                    };
+                    missing.push(MissingFieldInfo {
+                        field_name: field.name.to_string(),
+                        field_path,
+                        type_name: field_shape.type_identifier.to_string(),
+                        doc_comment,
+                    });
+                }
             }
         }
-        ConfigValue::Array(sourced) => {
-            for val in &sourced.value {
-                collect_missing_values(val, missing);
-            }
-        }
-        _ => {}
     }
+
+    // Also recurse into arrays
+    if let ConfigValue::Array(sourced) = value {
+        let element_shape = shape.inner.unwrap_or(shape);
+        for (i, item) in sourced.value.iter().enumerate() {
+            let item_path = if path_prefix.is_empty() {
+                format!("[{}]", i)
+            } else {
+                format!("{}[{}]", path_prefix, i)
+            };
+            collect_missing_fields(item, element_shape, &item_path, missing);
+        }
+    }
+}
+
+/// Information about a missing required field.
+#[derive(Debug, Clone)]
+pub struct MissingFieldInfo {
+    /// Field name (e.g., "email" or "host")
+    pub field_name: String,
+    /// Full path (e.g., "config.server.host")
+    pub field_path: String,
+    /// Type name
+    pub type_name: String,
+    /// Documentation comment if available
+    pub doc_comment: Option<String>,
 }
 
 /// A line to be printed in the config dump.
@@ -366,9 +415,10 @@ fn collect_dump_lines(
             if let facet_core::Type::User(facet_core::UserType::Struct(s)) = &shape.ty {
                 for field in s.fields {
                     let key = field.name;
+                    let is_sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
+                    let field_shape = field.shape.get();
+
                     if let Some(val) = sourced.value.get(key) {
-                        let is_sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
-                        let field_shape = field.shape.get();
                         collect_dump_lines(
                             val,
                             key,
@@ -379,6 +429,49 @@ fn collect_dump_lines(
                             ctx,
                             state,
                         );
+                    } else {
+                        // Field is missing from ConfigValue - check if it has a default
+                        let has_default = field.default.is_some();
+                        let is_option = field_shape.type_identifier.contains("Option");
+
+                        if has_default || is_option {
+                            // Field has a default or is Option - show as <default>
+                            let colored_value = "<default>".bright_black().to_string();
+                            lines.push(DumpLine {
+                                indent: indent + 1,
+                                key: key.to_string(),
+                                value: colored_value,
+                                provenance: "DEFAULT".bright_black().to_string(),
+                                is_header: false,
+                            });
+                        } else {
+                            // Required field without default - show MISSING marker
+                            let colored_value =
+                                format!("❌ MISSING <{}>", field_shape.type_identifier)
+                                    .red()
+                                    .bold()
+                                    .to_string();
+                            lines.push(DumpLine {
+                                indent: indent + 1,
+                                key: key.to_string(),
+                                value: colored_value,
+                                provenance: String::new(),
+                                is_header: false,
+                            });
+
+                            // Show doc comment as help text if available
+                            if !field.doc.is_empty() {
+                                let help_text =
+                                    format!("  {}", field.doc.join(" ")).dimmed().to_string();
+                                lines.push(DumpLine {
+                                    indent: indent + 1,
+                                    key: String::new(),
+                                    value: help_text,
+                                    provenance: String::new(),
+                                    is_header: false,
+                                });
+                            }
+                        }
                     }
                 }
             } else {
@@ -493,32 +586,6 @@ fn collect_dump_lines(
             // Dump the enum's fields
             for (key, val) in sourced.value.fields.iter() {
                 collect_dump_lines(val, key, indent + 1, shape, false, lines, ctx, state);
-            }
-        }
-        ConfigValue::Missing(info) => {
-            // Show big red MISSING marker with type info
-            let colored_value = format!("❌ MISSING <{}>", info.type_name)
-                .red()
-                .bold()
-                .to_string();
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: colored_value,
-                provenance: String::new(),
-                is_header: false,
-            });
-
-            // Show doc comment as help text if available
-            if let Some(doc) = &info.doc_comment {
-                let help_text = format!("  {}", doc).dimmed().to_string();
-                lines.push(DumpLine {
-                    indent,
-                    key: String::new(),
-                    value: help_text,
-                    provenance: String::new(),
-                    is_header: false,
-                });
             }
         }
     }

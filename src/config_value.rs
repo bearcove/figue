@@ -57,19 +57,6 @@ impl<T> Sourced<T> {
     }
 }
 
-/// Information about a missing required field.
-#[derive(Debug, Clone, Facet)]
-pub struct MissingFieldInfo {
-    /// Field name (e.g., "email" or "host")
-    pub field_name: String,
-    /// Full path (e.g., "config.server.host")
-    pub field_path: String,
-    /// Type name
-    pub type_name: String,
-    /// Documentation comment if available
-    pub doc_comment: Option<String>,
-}
-
 /// Type alias for the object map type used in ConfigValue.
 /// Keys are original field names (from target_path / struct definition).
 /// The ConfigValueParser translates to effective names when emitting events.
@@ -105,8 +92,6 @@ pub enum ConfigValue {
     Object(Sourced<ObjectMap>),
     /// An enum value (subcommand or enum field in config).
     Enum(Sourced<EnumValue>),
-    /// A missing required field (used for error reporting)
-    Missing(MissingFieldInfo),
 }
 
 /// Parse a CLI value string and infer its type.
@@ -293,9 +278,6 @@ impl ConfigValue {
                     };
                     value.set_file_provenance_recursive(file, &key_path);
                 }
-            }
-            ConfigValue::Missing(_) => {
-                // Missing values don't have file provenance - they're synthetic markers
             }
         }
     }

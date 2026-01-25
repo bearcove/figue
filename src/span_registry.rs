@@ -206,7 +206,6 @@ fn assign_virtual_spans_recursive(value: &ConfigValue, registry: &mut SpanRegist
                 provenance: sourced.provenance.clone(),
             })
         }
-        ConfigValue::Missing(info) => ConfigValue::Missing(info.clone()),
     }
 }
 

@@ -105,14 +105,23 @@ fn fill_defaults_from_shape_recursive(
             for field in fields.iter() {
                 if !new_map.contains_key(field.name) {
                     // Field is missing - get default or create Missing marker
-                    let default_value = get_default_config_value(field, path_prefix);
-                    tracing::debug!(
-                        field = field.name,
-                        shape = shape.type_identifier,
-                        ?default_value,
-                        "fill_defaults_from_shape_recursive: inserting default for missing field"
-                    );
-                    new_map.insert(field.name.to_string(), default_value);
+                    // Returns None if the field has a default that can't be serialized -
+                    // in that case we don't insert anything and let facet handle the default
+                    if let Some(default_value) = get_default_config_value(field, path_prefix) {
+                        tracing::debug!(
+                            field = field.name,
+                            shape = shape.type_identifier,
+                            ?default_value,
+                            "fill_defaults_from_shape_recursive: inserting default for missing field"
+                        );
+                        new_map.insert(field.name.to_string(), default_value);
+                    } else {
+                        tracing::debug!(
+                            field = field.name,
+                            shape = shape.type_identifier,
+                            "fill_defaults_from_shape_recursive: field has unserializable default, letting facet handle it"
+                        );
+                    }
                 }
             }
 
@@ -187,8 +196,9 @@ fn fill_defaults_from_shape_recursive(
                     } else {
                         format!("{}.{}", path_prefix, field.name)
                     };
-                    let default_value = get_default_config_value(field, &field_path);
-                    new_fields.insert(field.name.to_string(), default_value);
+                    if let Some(default_value) = get_default_config_value(field, &field_path) {
+                        new_fields.insert(field.name.to_string(), default_value);
+                    }
                 }
             }
 
@@ -224,7 +234,14 @@ fn fill_defaults_from_shape_recursive(
 /// For scalar fields without defaults, provides CLI-friendly defaults (false/0).
 /// For struct fields without defaults, creates an empty Object for recursive filling.
 /// For required fields without defaults, returns ConfigValue::Missing with field info.
-fn get_default_config_value(field: &'static facet_core::Field, path_prefix: &str) -> ConfigValue {
+///
+/// Returns None when the field has a default but it can't be serialized to ConfigValue.
+/// In that case, the caller should skip inserting the field and let facet's deserializer
+/// apply the field's default function directly.
+fn get_default_config_value(
+    field: &'static facet_core::Field,
+    path_prefix: &str,
+) -> Option<ConfigValue> {
     use facet_core::ScalarType;
 
     let shape = field.shape.get();
@@ -237,42 +254,58 @@ fn get_default_config_value(field: &'static facet_core::Field, path_prefix: &str
         );
 
         if let Ok(config_value) = serialize_default_to_config_value(default_source, shape) {
+            // Check if serialization actually produced a useful value
+            // (not null for non-nullable types)
+            if !matches!(config_value, ConfigValue::Null(_)) {
+                tracing::debug!(
+                    field = field.name,
+                    ?config_value,
+                    "get_default_config_value: successfully serialized default"
+                );
+                return Some(config_value);
+            }
+            // Null result for a type that has a default but can't serialize -
+            // fall through to let facet handle the default during deserialization
             tracing::debug!(
                 field = field.name,
-                ?config_value,
-                "get_default_config_value: successfully serialized default"
+                "get_default_config_value: serialized to null, letting facet handle default"
             );
-            return config_value;
         } else {
-            tracing::error!(
+            // Serialization failed - the type has a default but can't be represented
+            // as ConfigValue. Let facet handle it during deserialization.
+            tracing::debug!(
                 field = field.name,
-                "get_default_config_value: failed to serialize default, returning Missing"
+                "get_default_config_value: serialization failed, letting facet handle default"
             );
         }
+        // The field has a default but we can't represent it as ConfigValue.
+        // Return None so the caller skips inserting this field, letting facet's
+        // deserializer apply the field's default function.
+        return None;
     }
 
     // Option<T> implicitly has Default semantics (None)
     // Check type_identifier for "Option" - handles both std::option::Option and core::option::Option
     if shape.type_identifier.contains("Option") {
-        return ConfigValue::Null(Sourced {
+        return Some(ConfigValue::Null(Sourced {
             value: (),
             span: None,
             provenance: Some(Provenance::Default),
-        });
+        }));
     }
 
     // For struct types without explicit defaults, create empty object for recursive filling
     if let Type::User(UserType::Struct(_)) = &shape.ty {
-        return ConfigValue::Object(Sourced {
+        return Some(ConfigValue::Object(Sourced {
             value: IndexMap::default(),
             span: None,
             provenance: Some(Provenance::Default),
-        });
+        }));
     }
 
     // For scalar types without explicit defaults, emit CLI-friendly defaults
     if let Some(scalar_type) = shape.scalar_type() {
-        return match scalar_type {
+        return Some(match scalar_type {
             ScalarType::Bool => ConfigValue::Bool(Sourced {
                 value: false,
                 span: None,
@@ -295,39 +328,14 @@ fn get_default_config_value(field: &'static facet_core::Field, path_prefix: &str
                 provenance: Some(Provenance::Default),
             }),
             _ => {
-                // No sensible default for other scalar types
-                create_missing_marker(field, path_prefix, shape)
+                // No sensible default for other scalar types - don't fill
+                return None;
             }
-        };
+        });
     }
 
-    // No default available - create Missing marker
-    create_missing_marker(field, path_prefix, shape)
-}
-
-fn create_missing_marker(
-    field: &'static facet_core::Field,
-    path_prefix: &str,
-    shape: &'static facet_core::Shape,
-) -> ConfigValue {
-    let field_path = if path_prefix.is_empty() {
-        field.name.to_string()
-    } else {
-        format!("{}.{}", path_prefix, field.name)
-    };
-
-    let doc_comment = if field.doc.is_empty() {
-        None
-    } else {
-        Some(field.doc.join("\n"))
-    };
-
-    ConfigValue::Missing(crate::config_value::MissingFieldInfo {
-        field_name: field.name.to_string(),
-        field_path,
-        type_name: shape.type_identifier.to_string(),
-        doc_comment,
-    })
+    // No default available - don't fill, let schema-driven logic handle missing fields
+    None
 }
 
 /// Serialize a default value to ConfigValue by invoking the default function
@@ -386,7 +394,21 @@ fn serialize_default_to_config_value(
     facet_format::serialize_root(&mut serializer, peek)
         .map_err(|e| format!("Serialization failed: {:?}", e))?;
 
-    Ok(serializer.finish())
+    let result = serializer.finish();
+
+    // If serialization returned Null but the type has Display, use the string representation.
+    // This handles opaque types like IpAddr, PathBuf, etc. that don't serialize natively
+    // but can be represented as strings for CLI/env/config purposes.
+    if matches!(result, ConfigValue::Null(_)) && shape.vtable.has_display() {
+        let string_value = peek.to_string();
+        return Ok(ConfigValue::String(Sourced {
+            value: string_value,
+            span: None,
+            provenance: Some(Provenance::Default),
+        }));
+    }
+
+    Ok(result)
 }
 
 /// Errors that can occur during ConfigValue deserialization.
@@ -800,13 +822,6 @@ impl<'input> ConfigValueParser<'input> {
 
                 // Emit the outer struct start (the enum wrapper)
                 Ok(ParseEvent::StructStart(ContainerKind::Object))
-            }
-            ConfigValue::Missing(info) => {
-                // Missing values cannot be deserialized - they're error markers
-                Err(ConfigValueParseError::Message(format!(
-                    "Required field '{}' is missing",
-                    info.field_path
-                )))
             }
         }
     }
