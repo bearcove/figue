@@ -28,7 +28,7 @@ fn main() {
     }
 
     // Check what happens with a string
-    let ip_str = "127.0.0.1";
+    let _ip_str = "127.0.0.1";
     println!("\nNow checking string -> IpAddr conversion:");
     println!(
         "String shape scalar_type: {:?}",

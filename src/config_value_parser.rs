@@ -240,7 +240,7 @@ fn fill_defaults_from_shape_recursive(
 /// apply the field's default function directly.
 fn get_default_config_value(
     field: &'static facet_core::Field,
-    path_prefix: &str,
+    _path_prefix: &str,
 ) -> Option<ConfigValue> {
     use facet_core::ScalarType;
 

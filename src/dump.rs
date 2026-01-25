@@ -267,7 +267,7 @@ fn write_config_values<T: Facet<'static>>(w: &mut impl Write, value: &ConfigValu
     // Step 1: Coerce string values to their target types (for env vars)
     let coerced_value = coerce_types_from_shape(value, T::SHAPE);
 
-    // Step 2: Collect all lines
+    // Step 2: Collect all lines by walking the schema
     let mut lines = Vec::new();
     let mut state = DumpState::new();
     if let ConfigValue::Object(sourced) = &coerced_value
@@ -275,9 +275,10 @@ fn write_config_values<T: Facet<'static>>(w: &mut impl Write, value: &ConfigValu
     {
         for field in s.fields {
             let key = field.name;
+            let is_sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
+            let field_shape = field.shape.get();
+
             if let Some(val) = sourced.value.get(key) {
-                let is_sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
-                let field_shape = field.shape.get();
                 collect_dump_lines(
                     val,
                     key,
@@ -288,6 +289,47 @@ fn write_config_values<T: Facet<'static>>(w: &mut impl Write, value: &ConfigValu
                     &ctx,
                     &mut state,
                 );
+            } else {
+                // Field is missing from ConfigValue - check if it has a default
+                let has_default = field.default.is_some();
+                let is_option = field_shape.type_identifier.contains("Option");
+
+                if has_default || is_option {
+                    // Field has a default or is Option - show as <default>
+                    let colored_value = "<default>".bright_black().to_string();
+                    lines.push(DumpLine {
+                        indent: 0,
+                        key: key.to_string(),
+                        value: colored_value,
+                        provenance: "DEFAULT".bright_black().to_string(),
+                        is_header: false,
+                    });
+                } else {
+                    // Required field without default - show MISSING marker
+                    let colored_value = format!("❌ MISSING <{}>", field_shape.type_identifier)
+                        .red()
+                        .bold()
+                        .to_string();
+                    lines.push(DumpLine {
+                        indent: 0,
+                        key: key.to_string(),
+                        value: colored_value,
+                        provenance: String::new(),
+                        is_header: false,
+                    });
+
+                    // Show doc comment as help text if available
+                    if !field.doc.is_empty() {
+                        let help_text = format!("  {}", field.doc.join(" ")).dimmed().to_string();
+                        lines.push(DumpLine {
+                            indent: 0,
+                            key: String::new(),
+                            value: help_text,
+                            provenance: String::new(),
+                            is_header: false,
+                        });
+                    }
+                }
             }
         }
     }
