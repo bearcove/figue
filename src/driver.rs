@@ -438,7 +438,7 @@ pub struct DriverReport {
     pub overrides: Vec<Override>,
     /// Source contents for error display (CLI args, env var value, or file contents).
     pub cli_args_source: String,
-    /// Name of the source for error display (e.g., "<cli>", "$VAR", "config.toml").
+    /// Name of the source for error display (e.g., `<cli>`, `$VAR`, `config.toml`).
     pub source_name: String,
 }
 

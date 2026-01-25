@@ -12,7 +12,6 @@ use std::vec::Vec;
 
 use camino::Utf8PathBuf;
 use facet::Facet;
-use facet_error as error;
 use facet_reflect::{Partial, ReflectError};
 
 use crate::{
@@ -34,7 +33,7 @@ use crate::{
 ///
 /// This call is fallible because it makes sure that the struct that you pass in, is actually a struct
 /// and not an enum, and that all its fields and subfields are actually properly annotated with
-/// [`facet(args::positional)`], [`facet(args::named)`], etc. — see [`crate::Attr`]
+/// `#[facet(args::positional)]`, `#[facet(args::named)]`, etc. — see [`crate::Attr`]
 ///
 /// This function also already allocates the destination shape, to avoid unsafe code later on.
 /// If this allocation fails, then another error is returned.
@@ -450,43 +449,79 @@ impl FileConfigBuilder {
 // Errors
 // ============================================================================
 
-#[derive(Facet, Debug)]
-#[facet(derive(Error))]
+#[derive(Facet)]
 #[repr(u8)]
 pub enum BuilderError {
-    /// The schema provided to BuilderError was invalid.
-    SchemaError(#[facet(opaque, error::from)] SchemaError),
-
-    /// Allocation failed while constructing the builder.
+    SchemaError(#[facet(opaque)] SchemaError),
     Alloc(#[facet(opaque)] ReflectError),
-
-    /// Config file not found at the specified path: {path}
     FileNotFound {
-        /// The path that was explicitly requested.
         path: Utf8PathBuf,
     },
-
-    /// Error reading config file: {0}: {1}
     FileRead(Utf8PathBuf, String),
-
-    /// Error parsing config file: {0}: {1}
     FileParse(Utf8PathBuf, ConfigFormatError),
-
-    /// Error parsing CLI arguments: {0}
     CliParse(String),
-
-    /// Unknown configuration key (in strict mode): {key} (source: {source}, suggestion: {suggestion:?})
     UnknownKey {
-        /// The unknown key that was found.
         key: String,
-        /// Where the key came from ("env", "file", "cli").
         source: &'static str,
-        /// A suggested correction, if one was found.
         suggestion: Option<String>,
     },
-
-    /// Missing required configuration value: {0}
     MissingRequired(String),
+}
+
+impl std::fmt::Display for BuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuilderError::SchemaError(e) => write!(f, "{e}"),
+            BuilderError::Alloc(e) => write!(f, "allocation failed: {e}"),
+            BuilderError::FileNotFound { path } => {
+                write!(f, "config file not found: {path}")
+            }
+            BuilderError::FileRead(path, msg) => {
+                write!(f, "error reading {path}: {msg}")
+            }
+            BuilderError::FileParse(path, e) => {
+                write!(f, "error parsing {path}: {e}")
+            }
+            BuilderError::CliParse(msg) => write!(f, "{msg}"),
+            BuilderError::UnknownKey {
+                key,
+                source,
+                suggestion,
+            } => {
+                write!(f, "unknown configuration key '{key}' from {source}")?;
+                if let Some(suggestion) = suggestion {
+                    write!(f, " (did you mean '{suggestion}'?)")?;
+                }
+                Ok(())
+            }
+            BuilderError::MissingRequired(field) => {
+                write!(f, "missing required configuration: {field}")
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for BuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for BuilderError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BuilderError::SchemaError(e) => Some(e),
+            BuilderError::Alloc(e) => Some(e),
+            BuilderError::FileParse(_, e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<SchemaError> for BuilderError {
+    fn from(e: SchemaError) -> Self {
+        BuilderError::SchemaError(e)
+    }
 }
 
 // ============================================================================

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::assert_help_snapshot;
 use facet::Facet;
 use figue as args;
 
@@ -34,7 +35,7 @@ fn test_help_simple_struct() {
         ..Default::default()
     };
     let help = figue::generate_help::<SimpleArgs>(&config);
-    insta::assert_snapshot!(help);
+    assert_help_snapshot!(help);
 }
 
 /// Git-like CLI with subcommands
@@ -116,7 +117,7 @@ fn test_help_with_subcommands() {
         ..Default::default()
     };
     let help = figue::generate_help::<GitArgs>(&config);
-    insta::assert_snapshot!(help);
+    assert_help_snapshot!(help);
 }
 
 #[test]
@@ -126,7 +127,7 @@ fn test_help_enum_only() {
         ..Default::default()
     };
     let help = figue::generate_help::<GitCommand>(&config);
-    insta::assert_snapshot!(help);
+    assert_help_snapshot!(help);
 }
 
 // =============================================================================
@@ -277,7 +278,7 @@ fn test_subcommand_help_colored_snapshot() {
     // Yellow/bold for section headers
     assert!(help.contains("USAGE") || help.contains("ARGUMENTS"));
 
-    insta::assert_snapshot!(help);
+    assert_help_snapshot!(help);
 }
 
 #[test]
@@ -293,7 +294,7 @@ fn test_nested_subcommand_help_colored_snapshot() {
     // Should contain the nested command path
     assert!(help.contains("remote") && help.contains("add"));
 
-    insta::assert_snapshot!(help);
+    assert_help_snapshot!(help);
 }
 
 // =============================================================================
@@ -348,7 +349,7 @@ fn test_tuple_variant_subcommand_help_flattening() {
         ..Default::default()
     };
     let help = figue::generate_help::<Args>(&config);
-    insta::assert_snapshot!("tuple_variant_main_help", help);
+    assert_help_snapshot!("tuple_variant_main_help", help);
 
     // Test help for the "build" subcommand - should show flattened BuildArgs fields
     let result = figue::from_slice::<Args>(&["build", "--help"]);
@@ -377,5 +378,5 @@ fn test_tuple_variant_subcommand_help_flattening() {
         "Help should show --no-tui flag. Got:\n{help}"
     );
 
-    insta::assert_snapshot!("tuple_variant_subcommand_help", help);
+    assert_help_snapshot!("tuple_variant_subcommand_help", help);
 }
