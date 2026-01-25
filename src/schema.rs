@@ -518,6 +518,19 @@ impl ValueSchema {
         )
     }
 
+    /// Check if this is a boolean type or a Vec<bool>.
+    /// Used for determining if a flag can appear multiple times as a bool accumulator.
+    pub fn is_bool_or_vec_of_bool(&self) -> bool {
+        match self {
+            ValueSchema::Leaf(LeafSchema {
+                kind: LeafKind::Scalar(ScalarType::Bool),
+                ..
+            }) => true,
+            ValueSchema::Vec { element, .. } => element.is_bool(),
+            _ => false,
+        }
+    }
+
     /// Unwrap Option wrapper if present, returning the inner schema.
     pub fn inner_if_option(&self) -> &ValueSchema {
         match self {

@@ -305,7 +305,10 @@ impl<'a> ParseContext<'a> {
                     continue;
                 }
 
-                let is_bool = arg_schema.value().inner_if_option().is_bool();
+                let is_bool = arg_schema
+                    .value()
+                    .inner_if_option()
+                    .is_bool_or_vec_of_bool();
                 let is_last = i == chars.len() - 1;
 
                 if is_bool {
@@ -685,6 +688,7 @@ impl<'a> ParseContext<'a> {
 }
 
 /// Insert a value at a nested path in an IndexMap.
+/// If the path already has a value, accumulates into an array.
 fn insert_nested(
     map: &mut IndexMap<String, ConfigValue, RandomState>,
     path: &[&str],
@@ -695,7 +699,34 @@ fn insert_nested(
     }
 
     if path.len() == 1 {
-        map.insert(path[0].to_string(), value);
+        let key = path[0].to_string();
+        // Check if there's already a value at this path
+        if let Some(existing) = map.get_mut(&key) {
+            // Accumulate into an array
+            match existing {
+                ConfigValue::Array(arr) => {
+                    // Already an array, push the new value
+                    arr.value.push(value);
+                }
+                _ => {
+                    // Convert existing scalar to array with both values
+                    let old_value = std::mem::replace(
+                        existing,
+                        ConfigValue::Array(Sourced {
+                            value: Vec::new(),
+                            span: None,
+                            provenance: None,
+                        }),
+                    );
+                    if let ConfigValue::Array(arr) = existing {
+                        arr.value.push(old_value);
+                        arr.value.push(value);
+                    }
+                }
+            }
+        } else {
+            map.insert(key, value);
+        }
         return;
     }
 
