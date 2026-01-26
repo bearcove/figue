@@ -332,7 +332,31 @@ pub enum ConfigValueSchema {
         value: Box<ConfigValueSchema>,
         shape: &'static Shape,
     },
+    Enum(ConfigEnumSchema),
     Leaf(LeafSchema),
+}
+
+/// Schema for an enum in a config value (with struct variants)
+#[derive(Facet, Debug)]
+#[facet(skip_all_unless_truthy)]
+pub struct ConfigEnumSchema {
+    /// Shape of the enum.
+    #[facet(skip)]
+    shape: &'static Shape,
+
+    /// Variants of the enum, keyed by effective name.
+    variants: IndexMap<String, ConfigEnumVariantSchema, RandomState>,
+}
+
+/// Schema for an enum variant
+#[derive(Facet, Debug)]
+#[facet(skip_all_unless_truthy)]
+pub struct ConfigEnumVariantSchema {
+    /// Documentation for this variant.
+    docs: Docs,
+
+    /// Fields of this variant (empty for unit variants).
+    fields: IndexMap<String, ConfigFieldSchema, RandomState>,
 }
 
 /// Visitor for walking schema structures.
@@ -420,6 +444,14 @@ impl ConfigStructSchema {
                     v.element.as_ref()
                 }
                 ConfigValueSchema::Option { value, .. } => value.as_ref(),
+                ConfigValueSchema::Enum(e) => {
+                    // For enums, the segment could be a variant name or a field within a variant
+                    // Try to find the field in any variant
+                    e.variants
+                        .values()
+                        .find_map(|v| v.fields.get(segment))
+                        .map(|f| &f.value)?
+                }
                 ConfigValueSchema::Leaf(_) => return None,
             };
         }
@@ -436,6 +468,17 @@ impl ConfigValueSchema {
             ConfigValueSchema::Struct(s) => s.visit(visitor, path),
             ConfigValueSchema::Vec(v) => v.element.visit(visitor, path),
             ConfigValueSchema::Option { value, .. } => value.visit(visitor, path),
+            ConfigValueSchema::Enum(e) => {
+                for (name, variant) in &e.variants {
+                    path.push(name.clone());
+                    for (field_name, field) in &variant.fields {
+                        path.push(field_name.clone());
+                        field.value.visit(visitor, path);
+                        path.pop();
+                    }
+                    path.pop();
+                }
+            }
             ConfigValueSchema::Leaf(_) => {}
         }
     }
@@ -637,6 +680,35 @@ impl ConfigVecSchema {
     /// Get the shape of this vec.
     pub fn shape(&self) -> &'static Shape {
         self.shape
+    }
+}
+
+impl ConfigEnumSchema {
+    /// Get the variants of this enum.
+    pub fn variants(&self) -> &IndexMap<String, ConfigEnumVariantSchema, RandomState> {
+        &self.variants
+    }
+
+    /// Get a variant by name.
+    pub fn get_variant(&self, name: &str) -> Option<&ConfigEnumVariantSchema> {
+        self.variants.get(name)
+    }
+
+    /// Get the shape of this enum.
+    pub fn shape(&self) -> &'static Shape {
+        self.shape
+    }
+}
+
+impl ConfigEnumVariantSchema {
+    /// Get the fields of this variant.
+    pub fn fields(&self) -> &IndexMap<String, ConfigFieldSchema, RandomState> {
+        &self.fields
+    }
+
+    /// Get the documentation for this variant.
+    pub fn docs(&self) -> &Docs {
+        &self.docs
     }
 }
 

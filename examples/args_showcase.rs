@@ -7,7 +7,7 @@
 
 use facet::Facet;
 use facet_showcase::{Language, Scenario, ShowcaseRunner};
-use figue::{self as args, driver::DriverError};
+use figue::{self as args, DriverError};
 
 /// Extension trait for displaying args parse results with Ariadne error formatting.
 trait ArgsResultExt<'a, 'b, T: facet::Facet<'b>> {

@@ -173,6 +173,11 @@ pub struct FileConfig {
 
     /// Whether to error on unknown keys in the config file.
     pub strict: bool,
+
+    /// Inline content for testing (avoids disk I/O).
+    /// When set, this content is used instead of reading from disk.
+    /// The tuple is (content, filename_for_format_detection).
+    pub inline_content: Option<(String, String)>,
 }
 
 impl Default for FileConfig {
@@ -182,6 +187,7 @@ impl Default for FileConfig {
             default_paths: Vec::new(),
             registry: FormatRegistry::with_defaults(),
             strict: false,
+            inline_content: None,
         }
     }
 }
@@ -217,6 +223,14 @@ impl FileConfig {
     /// Enable strict mode - error on unknown keys.
     pub fn strict(mut self) -> Self {
         self.strict = true;
+        self
+    }
+
+    /// Set inline content for testing (avoids disk I/O).
+    ///
+    /// The filename is used for format detection (e.g., "config.toml" or "settings.json").
+    pub fn content(mut self, content: impl Into<String>, filename: impl Into<String>) -> Self {
+        self.inline_content = Some((content.into(), filename.into()));
         self
     }
 }
@@ -300,19 +314,28 @@ impl<'a> FileParseContext<'a> {
     }
 
     fn parse(&mut self) {
-        // Resolve which file to load
-        let path = match self.resolve_path() {
-            Some(p) => p,
-            None => return, // No file to load (not an error if no explicit path)
-        };
+        // Check for inline content first (used for testing)
+        let (path, contents) = if let Some((content, filename)) = &self.config.inline_content {
+            let path = Utf8PathBuf::from(filename);
+            // Record this as a "picked" file in resolution for display purposes
+            self.resolution.add_explicit(path.clone(), true);
+            (path, content.clone())
+        } else {
+            // Resolve which file to load
+            let path = match self.resolve_path() {
+                Some(p) => p,
+                None => return, // No file to load (not an error if no explicit path)
+            };
 
-        // Read the file
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                self.emit_error(format!("failed to read {}: {}", path, e));
-                return;
-            }
+            // Read the file
+            let contents = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    self.emit_error(format!("failed to read {}: {}", path, e));
+                    return;
+                }
+            };
+            (path, contents)
         };
 
         // Parse the file
@@ -426,6 +449,17 @@ impl<'a> FileParseContext<'a> {
             ConfigValueSchema::Vec(vec_schema) => {
                 // For vec, we can't predict indices, but we mark the prefix as valid
                 self.add_nested_paths(vec_schema.element(), prefix, valid);
+            }
+            ConfigValueSchema::Enum(enum_schema) => {
+                // For enums, add paths for all variant fields
+                for (_variant_name, variant_schema) in enum_schema.variants() {
+                    for (field_name, field_schema) in variant_schema.fields() {
+                        let mut path = prefix.clone();
+                        path.push(field_name.clone());
+                        valid.add_leaf(path.clone());
+                        self.add_nested_paths(field_schema.value(), path, valid);
+                    }
+                }
             }
             ConfigValueSchema::Leaf(_) => {
                 // Nothing more to add

@@ -227,6 +227,41 @@ fn collect_missing_in_config_value(
             // Option fields are never required, but recurse to check nested structs
             collect_missing_in_config_value(value, inner, path_prefix, ctx, missing);
         }
+        ConfigValueSchema::Enum(enum_schema) => {
+            // For enums, check if the selected variant has missing fields
+            if let ConfigValue::Enum(sourced) = value {
+                let variant_name = &sourced.value.variant;
+                if let Some(variant_schema) = enum_schema.get_variant(variant_name) {
+                    for (field_name, field_schema) in variant_schema.fields() {
+                        let field_path = format!("{}.{}", path_prefix, field_name);
+                        if let Some(field_value) = sourced.value.fields.get(field_name.as_str()) {
+                            collect_missing_in_config_value(
+                                field_value,
+                                field_schema.value(),
+                                &field_path,
+                                ctx,
+                                missing,
+                            );
+                        } else {
+                            let is_optional =
+                                matches!(field_schema.value(), ConfigValueSchema::Option { .. });
+                            if !is_optional {
+                                missing.push(MissingFieldInfo {
+                                    field_name: field_name.to_string(),
+                                    field_path: field_path,
+                                    type_name: type_name_from_config_value_schema(
+                                        field_schema.value(),
+                                    ),
+                                    doc_comment: None,
+                                    cli_flag: None,
+                                    env_var: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         ConfigValueSchema::Leaf(_) => {
             // Leaf values have no nested fields to check
         }
@@ -312,8 +347,13 @@ fn get_config_type_name(schema: &ConfigValueSchema) -> String {
         ConfigValueSchema::Option { value, .. } => {
             format!("Option<{}>", get_config_type_name(value))
         }
+        ConfigValueSchema::Enum(e) => e.shape().to_string(),
         ConfigValueSchema::Leaf(leaf) => leaf.shape.to_string(),
     }
+}
+
+fn type_name_from_config_value_schema(schema: &ConfigValueSchema) -> String {
+    get_config_type_name(schema)
 }
 
 /// Format a summary of missing fields for display after the config dump.

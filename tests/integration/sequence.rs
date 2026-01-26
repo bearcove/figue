@@ -6,36 +6,39 @@ use figue as args;
 fn test_simplest_value_singleton_list_named() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
-        #[facet(args::named, args::short = 's')]
-        strings: Vec<String>,
+        /// Names to greet
+        #[facet(args::named, args::short = 'n')]
+        names: Vec<String>,
     }
 
     // Test with multiple values (no delimiters)
-    let args_single: Args = figue::from_slice(&["-s", "joe", "-s", "le", "-s", "rigolo"]).unwrap();
+    let args: Args = figue::from_slice(&["-n", "joe", "-n", "le", "-n", "rigolo"]).unwrap();
 
-    assert_eq!(args_single.strings, vec!["joe", "le", "rigolo"]);
+    assert_eq!(args.names, vec!["joe", "le", "rigolo"]);
 }
 
 #[test]
 fn test_simplest_value_singleton_list_positional() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// Names to greet
         #[facet(args::positional)]
-        strings: Vec<String>,
+        names: Vec<String>,
     }
 
     // Test with multiple values (no delimiters)
-    let args_single: Args = figue::from_slice(&["joe", "le", "rigolo"]).unwrap();
+    let args: Args = figue::from_slice(&["joe", "le", "rigolo"]).unwrap();
 
-    assert_eq!(args_single.strings, vec!["joe", "le", "rigolo"]);
+    assert_eq!(args.names, vec!["joe", "le", "rigolo"]);
 }
 
 #[test]
 fn test_noargs_single_positional() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// The input file to process
         #[facet(args::positional)]
-        strings: String,
+        input: String,
     }
     let err = figue::from_slice::<Args>(&[]).unwrap_err();
     assert_diag_snapshot!(err);
@@ -45,19 +48,21 @@ fn test_noargs_single_positional() {
 fn test_noargs_vec_positional_default() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// Files to process
         #[facet(args::positional, default)]
-        strings: Vec<String>,
+        files: Vec<String>,
     }
     let args = figue::from_slice::<Args>(&[]).unwrap();
-    assert!(args.strings.is_empty());
+    assert!(args.files.is_empty());
 }
 
 #[test]
 fn test_noargs_vec_positional_no_default() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// Files to process (at least one required)
         #[facet(args::positional)]
-        strings: Vec<String>,
+        files: Vec<String>,
     }
     let err = figue::from_slice::<Args>(&[]).unwrap_err();
     assert_diag_snapshot!(err);
@@ -75,12 +80,15 @@ fn test_doubledash_nothing() {
 fn test_doubledash_flags_before_dd() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// Enable verbose output
         #[facet(args::named, default)]
         foo: bool,
 
+        /// Run in debug mode
         #[facet(args::named, default)]
         bar: bool,
 
+        /// Additional arguments
         #[facet(args::positional, default)]
         args: Vec<String>,
     }
@@ -93,12 +101,15 @@ fn test_doubledash_flags_before_dd() {
 fn test_doubledash_flags_across_dd() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// Enable verbose output
         #[facet(args::named, default)]
         foo: bool,
 
+        /// Run in debug mode
         #[facet(args::named, default)]
         bar: bool,
 
+        /// Additional arguments
         #[facet(args::positional, default)]
         args: Vec<String>,
     }
@@ -118,12 +129,15 @@ fn test_doubledash_flags_across_dd() {
 fn test_doubledash_flags_after_dd() {
     #[derive(Facet, Debug, PartialEq)]
     struct Args {
+        /// Enable verbose output
         #[facet(args::named, default)]
         foo: bool,
 
+        /// Run in debug mode
         #[facet(args::named, default)]
         bar: bool,
 
+        /// Additional arguments
         #[facet(args::positional, default)]
         args: Vec<String>,
     }

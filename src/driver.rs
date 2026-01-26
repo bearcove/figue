@@ -140,11 +140,7 @@ impl<T: Facet<'static>> Driver<T> {
 
         // 1c. Environment layer
         if let Some(ref env_config) = self.config.env_config {
-            layers.env = parse_env(
-                &self.config.schema,
-                env_config,
-                self.config.env_source.as_ref(),
-            );
+            layers.env = parse_env(&self.config.schema, env_config, env_config.source());
             all_diagnostics.extend(layers.env.diagnostics.iter().cloned());
         }
 

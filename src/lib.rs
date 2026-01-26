@@ -17,7 +17,7 @@ pub(crate) mod config_format;
 pub(crate) mod config_value;
 pub(crate) mod config_value_parser;
 pub(crate) mod diagnostics;
-pub mod driver;
+pub(crate) mod driver;
 pub(crate) mod dump;
 pub(crate) mod error;
 pub(crate) mod help;
@@ -39,8 +39,10 @@ use facet_core::Facet;
 
 pub use builder::builder;
 pub use completions::{Shell, generate_completions, generate_completions_for_shape};
+pub use driver::{Driver, DriverError, DriverOutput, DriverReport, DriverResult, DriverResultExt};
 pub use error::{ArgsErrorKind, ArgsErrorWithInput};
 pub use help::{HelpConfig, generate_help, generate_help_for_shape};
+pub use layers::env::MockEnv;
 
 /// Parse command-line arguments from `std::env::args()`.
 ///

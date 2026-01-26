@@ -20,7 +20,7 @@ use crate::{
     help::HelpConfig,
     layers::{
         cli::{CliConfig, CliConfigBuilder},
-        env::{EnvConfig, EnvConfigBuilder, EnvSource, StdEnv},
+        env::{EnvConfig, EnvConfigBuilder},
         file::FileConfig,
     },
     provenance::{ConfigResult, FilePathStatus, FileResolution, Provenance},
@@ -51,7 +51,6 @@ where
         help_config: None,
         env_config: None,
         file_config: None,
-        env_source: Box::new(StdEnv),
     })
 }
 
@@ -70,8 +69,6 @@ pub struct ConfigBuilder<T> {
     env_config: Option<EnvConfig>,
     /// File parsing settings for the file layer.
     file_config: Option<FileConfig>,
-    /// Source for environment variables (typically `StdEnv`).
-    env_source: Box<dyn EnvSource>,
 }
 
 /// Fully built configuration (schema + sources) for the driver.
@@ -86,19 +83,11 @@ pub struct Config<T> {
     pub env_config: Option<EnvConfig>,
     /// File parsing settings for the file layer.
     pub file_config: Option<FileConfig>,
-    /// Source for environment variables (typically `StdEnv`).
-    pub env_source: Box<dyn EnvSource>,
     /// Type marker.
     _phantom: PhantomData<T>,
 }
 
 impl<T> ConfigBuilder<T> {
-    /// Use a custom environment source (for testing).
-    pub fn with_env_source(mut self, source: impl EnvSource + 'static) -> Self {
-        self.env_source = Box::new(source);
-        self
-    }
-
     /// Configure CLI argument parsing.
     pub fn cli<F>(mut self, f: F) -> Self
     where
@@ -149,7 +138,6 @@ impl<T> ConfigBuilder<T> {
             help_config: self.help_config,
             env_config: self.env_config,
             file_config: self.file_config,
-            env_source: self.env_source,
             _phantom: PhantomData,
         }
     }
@@ -439,6 +427,14 @@ impl FileConfigBuilder {
         self
     }
 
+    /// Set inline content for testing (avoids disk I/O).
+    ///
+    /// The filename is used for format detection (e.g., "config.toml" or "settings.json").
+    pub fn content(mut self, content: impl Into<String>, filename: impl Into<String>) -> Self {
+        self.config.inline_content = Some((content.into(), filename.into()));
+        self
+    }
+
     /// Build the file configuration.
     fn build(self) -> FileConfig {
         self.config
@@ -562,8 +558,7 @@ mod tests {
 
         let result = builder::<TestConfig>()
             .unwrap()
-            .with_env_source(env)
-            .env(|env| env.prefix("TEST_BUILDER"))
+            .env(|e| e.prefix("TEST_BUILDER").source(env))
             .build_traced()
             .expect("should build");
 

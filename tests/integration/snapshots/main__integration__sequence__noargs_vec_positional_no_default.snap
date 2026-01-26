@@ -8,9 +8,10 @@ Sources:
   cli --settings.*
   defaults
 
-strings  ❌ MISSING <Vec<String>> 
+files.. .. ⨯ MISSING
 
 Missing:
-  strings <Vec<String>> (<strings>)
+  files <Vec<String>> (<files>)
+    Files to process (at least one required)
 
 Run with --help for usage information.

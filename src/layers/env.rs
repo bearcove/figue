@@ -124,7 +124,6 @@ impl EnvSource for MockEnv {
 // ============================================================================
 
 /// Configuration for environment variable parsing.
-#[derive(Debug, Clone)]
 pub struct EnvConfig {
     /// The prefix to look for (e.g., `MYAPP`). For example, configuration variable
     /// foo.bar will be overrideable via `MYAPP__FOO__BAR`.
@@ -133,6 +132,9 @@ pub struct EnvConfig {
     /// Whether to error out if any env vars that start with `MYAPP__` should be reported
     /// as errors and stop the program entirely (to try and catch typos)
     pub strict: bool,
+
+    /// Custom environment source (for testing). If None, uses StdEnv.
+    pub source: Option<Box<dyn EnvSource>>,
 }
 
 impl EnvConfig {
@@ -141,6 +143,7 @@ impl EnvConfig {
         Self {
             prefix: prefix.into(),
             strict: false,
+            source: None,
         }
     }
 
@@ -149,13 +152,28 @@ impl EnvConfig {
         self.strict = true;
         self
     }
+
+    /// Get the env source, or StdEnv if none set.
+    pub fn source(&self) -> &dyn EnvSource {
+        self.source.as_ref().map(|s| s.as_ref()).unwrap_or(&StdEnv)
+    }
 }
 
 /// Builder for environment variable configuration.
-#[derive(Debug, Default)]
 pub struct EnvConfigBuilder {
     prefix: String,
     strict: bool,
+    source: Option<Box<dyn EnvSource>>,
+}
+
+impl Default for EnvConfigBuilder {
+    fn default() -> Self {
+        Self {
+            prefix: String::new(),
+            strict: false,
+            source: None,
+        }
+    }
 }
 
 impl EnvConfigBuilder {
@@ -176,12 +194,19 @@ impl EnvConfigBuilder {
         self
     }
 
+    /// Use a custom environment source (for testing).
+    pub fn source(mut self, source: impl EnvSource + 'static) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+
     /// Build the env configuration.
     pub fn build(self) -> EnvConfig {
         let mut config = EnvConfig::new(self.prefix);
         if self.strict {
             config = config.strict();
         }
+        config.source = self.source;
         config
     }
 }
@@ -232,7 +257,16 @@ impl<'a> EnvParseContext<'a> {
     }
 
     fn parse(&mut self, source: &dyn EnvSource) {
-        let prefix_with_sep = format!("{}__", self.env_config.prefix);
+        // Use explicit prefix from config, or fall back to schema's env_prefix
+        let prefix = if self.env_config.prefix.is_empty() {
+            self.config_schema
+                .and_then(|cs| cs.env_prefix())
+                .unwrap_or("")
+        } else {
+            &self.env_config.prefix
+        };
+
+        let prefix_with_sep = format!("{}__", prefix);
 
         for (name, value) in source.vars() {
             // Check if this var matches our prefix

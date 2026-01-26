@@ -4,9 +4,9 @@ use crate::{
     Attr,
     reflection::{is_config_field, is_counted_field, is_supported_counted_type},
     schema::{
-        ArgKind, ArgLevelSchema, ArgSchema, ConfigFieldSchema, ConfigStructSchema,
-        ConfigValueSchema, ConfigVecSchema, Docs, LeafKind, LeafSchema, ScalarType, Schema,
-        SpecialFields, Subcommand, ValueSchema,
+        ArgKind, ArgLevelSchema, ArgSchema, ConfigEnumSchema, ConfigEnumVariantSchema,
+        ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, ConfigVecSchema, Docs, LeafKind,
+        LeafSchema, ScalarType, Schema, SpecialFields, Subcommand, ValueSchema,
         error::{SchemaError, SchemaErrorContext},
     },
 };
@@ -238,9 +238,51 @@ fn config_value_schema_from_shape(
             Type::User(UserType::Struct(_)) => Ok(ConfigValueSchema::Struct(
                 config_struct_schema_from_shape(shape, ctx, None, None)?,
             )),
+            Type::User(UserType::Enum(enum_type)) => Ok(ConfigValueSchema::Enum(
+                config_enum_schema_from_shape(shape, *enum_type, ctx)?,
+            )),
             _ => Ok(ConfigValueSchema::Leaf(leaf_schema_from_shape(shape, ctx)?)),
         },
     }
+}
+
+fn config_enum_schema_from_shape(
+    shape: &'static Shape,
+    enum_type: facet::EnumType,
+    ctx: &SchemaErrorContext,
+) -> Result<ConfigEnumSchema, SchemaError> {
+    let mut variants: IndexMap<String, ConfigEnumVariantSchema, RandomState> = IndexMap::default();
+
+    for variant in enum_type.variants {
+        let variant_ctx = ctx.with_variant(variant.name.to_string());
+        let docs = docs_from_lines(variant.doc);
+
+        let mut fields: IndexMap<String, ConfigFieldSchema, RandomState> = IndexMap::default();
+
+        // Handle struct variants
+        for field in variant.data.fields {
+            let field_ctx = variant_ctx.with_field(field.name);
+            let field_docs = docs_from_lines(field.doc);
+            let sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
+            let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
+
+            fields.insert(
+                field.effective_name().to_string(),
+                ConfigFieldSchema {
+                    docs: field_docs,
+                    sensitive,
+                    value,
+                },
+            );
+        }
+
+        variants.insert(
+            variant.effective_name().to_string(),
+            ConfigEnumVariantSchema { docs, fields },
+        );
+    }
+
+    Ok(ConfigEnumSchema { shape, variants })
 }
 
 fn config_struct_schema_from_shape(

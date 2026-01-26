@@ -8,7 +8,7 @@ Sources:
   cli --settings.*
   defaults
 
-required_field  ❌ MISSING <String> 
+required_field.. .. ⨯ MISSING
 
 Missing:
   required_field <String> (--required-field)

@@ -3,6 +3,7 @@ mod config;
 mod counted;
 mod err;
 mod help;
+mod layered;
 mod sequence;
 mod short_chaining;
 mod simple;

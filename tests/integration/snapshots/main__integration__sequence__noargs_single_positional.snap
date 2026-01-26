@@ -8,9 +8,10 @@ Sources:
   cli --settings.*
   defaults
 
-strings  ❌ MISSING <String> 
+input.. .. ⨯ MISSING
 
 Missing:
-  strings <String> (<strings>)
+  input <String> (<input>)
+    The input file to process
 
 Run with --help for usage information.

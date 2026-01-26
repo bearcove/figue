@@ -4,7 +4,7 @@ use crate::assert_diag_snapshot;
 use facet::Facet;
 use facet_testhelpers::test;
 use figue as args;
-use figue::driver::DriverError;
+use figue::DriverError;
 
 /// Test tuple variant subcommand with struct payload (like clap's automatic flattening)
 /// When a subcommand variant is `Add(AddArgs)` instead of `Add { name: String }`,
