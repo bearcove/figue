@@ -48,6 +48,11 @@ pub struct LayerOutput {
     pub unused_keys: Vec<UnusedKey>,
     /// Layer-specific diagnostics collected while parsing.
     pub diagnostics: Vec<Diagnostic>,
+    /// Virtual source text for this layer (for error reporting with Ariadne).
+    /// For env layers, this is a synthetic document like `VAR="value"\n`.
+    /// For file layers, this is the file contents.
+    /// For CLI, this is the concatenated args.
+    pub source_text: Option<String>,
 }
 
 /// A key that was unused by the schema, with provenance.
@@ -372,7 +377,8 @@ impl<T: Facet<'static>> Driver<T> {
 
         // Phase 4: Assign virtual spans and deserialize into T
         // The span registry maps virtual spans back to real source locations
-        let (value_with_virtual_spans, span_registry) = assign_virtual_spans(&value_with_defaults);
+        let mut value_with_virtual_spans = value_with_defaults;
+        let span_registry = assign_virtual_spans(&mut value_with_virtual_spans);
 
         let value: T = match from_config_value(&value_with_virtual_spans) {
             Ok(v) => v,

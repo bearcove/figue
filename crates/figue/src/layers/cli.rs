@@ -916,6 +916,7 @@ impl<'a> ParseContext<'a> {
             value,
             unused_keys,
             diagnostics,
+            source_text: None,
         }
     }
 }
