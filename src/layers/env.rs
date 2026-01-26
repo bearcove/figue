@@ -43,7 +43,7 @@ use indexmap::IndexMap;
 use crate::config_value::{ConfigValue, Sourced};
 use crate::driver::{Diagnostic, LayerOutput, Severity, UnusedKey};
 use crate::provenance::Provenance;
-use crate::schema::{ConfigStructSchema, ConfigValueSchema, Schema};
+use crate::schema::{ConfigEnumSchema, ConfigStructSchema, ConfigValueSchema, Schema};
 
 // ============================================================================
 // EnvSource trait
@@ -412,21 +412,16 @@ impl<'a> EnvParseContext<'a> {
                     }
                 }
                 ConfigValueSchema::Option { value, .. } => {
-                    // Unwrap option and check inner
-                    if let ConfigValueSchema::Struct(nested) = value.as_ref() {
-                        if let Some(mut nested_path) =
-                            self.resolve_path_in_schema(nested, &path[1..])
-                        {
-                            let mut result = vec![effective_name.clone()];
-                            result.append(&mut nested_path);
-                            Some(result)
-                        } else {
-                            None
-                        }
-                    } else {
-                        // Option of non-struct with more path - invalid
-                        None
-                    }
+                    // Unwrap option and check inner type
+                    self.resolve_path_in_value_schema(
+                        value.as_ref(),
+                        &path[1..],
+                        effective_name.clone(),
+                    )
+                }
+                ConfigValueSchema::Enum(enum_schema) => {
+                    // Next path segment should be a variant name
+                    self.resolve_path_in_enum(enum_schema, &path[1..], effective_name.clone())
                 }
                 _ => {
                     // Leaf with more path segments - invalid
@@ -435,6 +430,124 @@ impl<'a> EnvParseContext<'a> {
             }
         } else {
             None
+        }
+    }
+
+    /// Helper to resolve path through a ConfigValueSchema (handles Option/Struct/Enum).
+    fn resolve_path_in_value_schema(
+        &self,
+        value_schema: &ConfigValueSchema,
+        path: &[String],
+        prefix: String,
+    ) -> Option<Vec<String>> {
+        match value_schema {
+            ConfigValueSchema::Struct(nested) => {
+                if let Some(mut nested_path) = self.resolve_path_in_schema(nested, path) {
+                    let mut result = vec![prefix];
+                    result.append(&mut nested_path);
+                    Some(result)
+                } else {
+                    None
+                }
+            }
+            ConfigValueSchema::Enum(enum_schema) => {
+                self.resolve_path_in_enum(enum_schema, path, prefix)
+            }
+            ConfigValueSchema::Option { value, .. } => {
+                // Recursively unwrap nested Option
+                self.resolve_path_in_value_schema(value.as_ref(), path, prefix)
+            }
+            _ => {
+                // Non-nested type with more path - invalid
+                None
+            }
+        }
+    }
+
+    /// Resolve path within an enum schema.
+    ///
+    /// The first segment of path should be a variant name, and remaining segments
+    /// are fields within that variant.
+    fn resolve_path_in_enum(
+        &self,
+        enum_schema: &ConfigEnumSchema,
+        path: &[String],
+        prefix: String,
+    ) -> Option<Vec<String>> {
+        if path.is_empty() {
+            // Can't set an enum directly via env var path - need to specify variant
+            return None;
+        }
+
+        let variant_name = &path[0];
+
+        // Find variant by case-insensitive match
+        let (effective_variant_name, variant_schema) = enum_schema
+            .variants()
+            .iter()
+            .find(|(name, _)| name.to_lowercase() == *variant_name)?;
+
+        if path.len() == 1 {
+            // Just the variant name, no field - this would set the enum to this variant
+            // without any field data. Return the path including the variant name.
+            return Some(vec![prefix, effective_variant_name.clone()]);
+        }
+
+        // Resolve remaining path within the variant's fields
+        let field_path = &path[1..];
+        let field_name = &field_path[0];
+
+        let (effective_field_name, field_schema) = variant_schema
+            .fields()
+            .iter()
+            .find(|(name, _)| name.to_lowercase() == *field_name)?;
+
+        if field_path.len() == 1 {
+            // Leaf field within the variant
+            return Some(vec![
+                prefix,
+                effective_variant_name.clone(),
+                effective_field_name.clone(),
+            ]);
+        }
+
+        // More path segments - recurse into the field's value schema
+        match field_schema.value() {
+            ConfigValueSchema::Struct(nested) => {
+                if let Some(mut nested_path) =
+                    self.resolve_path_in_schema(nested, &field_path[1..])
+                {
+                    let mut result = vec![
+                        prefix,
+                        effective_variant_name.clone(),
+                        effective_field_name.clone(),
+                    ];
+                    result.append(&mut nested_path);
+                    Some(result)
+                } else {
+                    None
+                }
+            }
+            ConfigValueSchema::Option { value, .. } => self.resolve_path_in_value_schema(
+                value.as_ref(),
+                &field_path[1..],
+                format!(
+                    "{}.{}.{}",
+                    prefix, effective_variant_name, effective_field_name
+                ),
+            ),
+            ConfigValueSchema::Enum(nested_enum) => {
+                // Nested enum within variant field
+                self.resolve_path_in_enum(
+                    nested_enum,
+                    &field_path[1..],
+                    format!(
+                        "{}.{}.{}",
+                        prefix, effective_variant_name, effective_field_name
+                    ),
+                )
+            }
+            _ => None,
         }
     }
 
@@ -1672,5 +1785,226 @@ mod tests {
             !output.diagnostics.is_empty(),
             "invalid nested enum variant should produce a warning"
         );
+    }
+
+    // ========================================================================
+    // Tests: Enum variant field setting (issue #37)
+    // ========================================================================
+
+    /// Storage enum with struct variants for testing enum variant field paths
+    #[derive(Facet)]
+    #[repr(u8)]
+    #[allow(dead_code)]
+    enum Storage {
+        S3 { bucket: String, region: String },
+        Gcp { project: String, zone: String },
+        Local { path: String },
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithEnumVariants {
+        storage: Storage,
+        port: u16,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithEnumVariantConfig {
+        #[facet(args::config)]
+        config: ConfigWithEnumVariants,
+    }
+
+    #[test]
+    fn test_enum_variant_field_single() {
+        // Setting a single field within an enum variant: REEF__STORAGE__S3__BUCKET
+        let schema = Schema::from_shape(ArgsWithEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__STORAGE__S3__BUCKET", "my-bucket")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "should not have diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "should not have unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        // Should produce: {config: {storage: {s3: {bucket: "my-bucket"}}}}
+        let bucket = get_nested(&value, &["config", "storage", "S3", "bucket"])
+            .expect("should have config.storage.S3.bucket");
+        assert_eq!(get_string(bucket), Some("my-bucket"));
+    }
+
+    #[test]
+    fn test_enum_variant_field_multiple() {
+        // Setting multiple fields within the same enum variant
+        let schema = Schema::from_shape(ArgsWithEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([
+            ("REEF__STORAGE__S3__BUCKET", "my-bucket"),
+            ("REEF__STORAGE__S3__REGION", "us-east-1"),
+        ]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "should not have diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "should not have unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        let bucket = get_nested(&value, &["config", "storage", "S3", "bucket"])
+            .expect("should have config.storage.S3.bucket");
+        assert_eq!(get_string(bucket), Some("my-bucket"));
+
+        let region = get_nested(&value, &["config", "storage", "S3", "region"])
+            .expect("should have config.storage.S3.region");
+        assert_eq!(get_string(region), Some("us-east-1"));
+    }
+
+    #[test]
+    fn test_enum_variant_field_different_variant() {
+        // Setting fields in a different variant (Gcp instead of S3)
+        let schema = Schema::from_shape(ArgsWithEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__STORAGE__GCP__PROJECT", "my-project")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "should not have diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "should not have unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        let project = get_nested(&value, &["config", "storage", "Gcp", "project"])
+            .expect("should have config.storage.Gcp.project");
+        assert_eq!(get_string(project), Some("my-project"));
+    }
+
+    #[test]
+    fn test_enum_variant_field_with_regular_field() {
+        // Mix of enum variant field and regular config field
+        let schema = Schema::from_shape(ArgsWithEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([
+            ("REEF__STORAGE__S3__BUCKET", "my-bucket"),
+            ("REEF__PORT", "8080"),
+        ]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "should not have diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "should not have unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        let bucket = get_nested(&value, &["config", "storage", "S3", "bucket"])
+            .expect("should have config.storage.S3.bucket");
+        assert_eq!(get_string(bucket), Some("my-bucket"));
+
+        let port = get_nested(&value, &["config", "port"]).expect("should have config.port");
+        assert_eq!(get_string(port), Some("8080"));
+    }
+
+    #[test]
+    fn test_enum_variant_unknown_variant_rejected() {
+        // Unknown variant name should be rejected
+        let schema = Schema::from_shape(ArgsWithEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__STORAGE__AZURE__CONTAINER", "my-container")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        // Should have an unused key
+        assert!(
+            !output.unused_keys.is_empty(),
+            "unknown variant should produce unused key"
+        );
+        assert!(
+            output
+                .unused_keys
+                .iter()
+                .any(|k| k.key.iter().any(|s| s == "azure")),
+            "unused key should mention azure: {:?}",
+            output.unused_keys
+        );
+    }
+
+    #[test]
+    fn test_enum_variant_unknown_field_rejected() {
+        // Unknown field within a valid variant should be rejected
+        let schema = Schema::from_shape(ArgsWithEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__STORAGE__S3__UNKNOWN_FIELD", "value")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        // Should have an unused key
+        assert!(
+            !output.unused_keys.is_empty(),
+            "unknown field in variant should produce unused key"
+        );
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithOptionalEnumVariants {
+        storage: Option<Storage>,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithOptionalEnumVariantConfig {
+        #[facet(args::config)]
+        config: ConfigWithOptionalEnumVariants,
+    }
+
+    #[test]
+    fn test_optional_enum_variant_field() {
+        // Setting field within optional enum variant
+        let schema = Schema::from_shape(ArgsWithOptionalEnumVariantConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__STORAGE__LOCAL__PATH", "/data")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "should not have diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "should not have unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+        let path = get_nested(&value, &["config", "storage", "Local", "path"])
+            .expect("should have config.storage.Local.path");
+        assert_eq!(get_string(path), Some("/data"));
     }
 }
