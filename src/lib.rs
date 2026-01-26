@@ -23,6 +23,7 @@ pub(crate) mod error;
 pub(crate) mod help;
 pub(crate) mod layers;
 pub(crate) mod merge;
+pub(crate) mod missing;
 pub(crate) mod path;
 pub(crate) mod provenance;
 pub(crate) mod reflection;

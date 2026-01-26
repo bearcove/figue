@@ -3,6 +3,7 @@
 
 use crate::{
     config_value::ConfigValue,
+    missing::MissingFieldInfo,
     provenance::{ConfigResult, FilePathStatus, FileResolution, Provenance},
     reflection::{coerce_types_from_shape, find_config_field, get_env_prefix},
     schema::{ArgSchema, ConfigFieldSchema, ConfigValueSchema, Schema},
@@ -24,119 +25,6 @@ pub(crate) fn dump_config_with_missing_fields<T: Facet<'static>>(
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     dump_config_with_provenance::<T>(&mut handle, value, file_resolution);
-}
-
-/// Collect missing required fields by walking the schema and checking against the ConfigValue.
-/// A field is "missing" if it's not in the ConfigValue AND has no default AND is not Option.
-pub(crate) fn collect_missing_fields(
-    value: &ConfigValue,
-    shape: &'static facet_core::Shape,
-    path_prefix: &str,
-    missing: &mut Vec<MissingFieldInfo>,
-) {
-    if let ConfigValue::Object(sourced) = value
-        && let facet_core::Type::User(facet_core::UserType::Struct(s)) = &shape.ty
-    {
-        for field in s.fields {
-            let field_shape = field.shape.get();
-
-            // Handle flattened fields: their inner fields are at the current level
-            if field.is_flattened() {
-                if let facet_core::Type::User(facet_core::UserType::Struct(inner_s)) =
-                    &field_shape.ty
-                {
-                    for inner_field in inner_s.fields {
-                        let inner_path = if path_prefix.is_empty() {
-                            inner_field.name.to_string()
-                        } else {
-                            format!("{}.{}", path_prefix, inner_field.name)
-                        };
-                        let inner_shape = inner_field.shape.get();
-
-                        if let Some(val) = sourced.value.get(inner_field.name) {
-                            // Inner field exists at current level - recurse
-                            collect_missing_fields(val, inner_shape, &inner_path, missing);
-                        } else {
-                            // Inner field is missing - check if required
-                            let has_default = inner_field.default.is_some();
-                            let is_option = inner_shape.type_identifier.contains("Option");
-
-                            if !has_default && !is_option {
-                                let doc_comment = if inner_field.doc.is_empty() {
-                                    None
-                                } else {
-                                    Some(inner_field.doc.join("\n"))
-                                };
-                                missing.push(MissingFieldInfo {
-                                    field_name: inner_field.name.to_string(),
-                                    field_path: inner_path,
-                                    type_name: inner_shape.type_identifier.to_string(),
-                                    doc_comment,
-                                });
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
-            let field_path = if path_prefix.is_empty() {
-                field.name.to_string()
-            } else {
-                format!("{}.{}", path_prefix, field.name)
-            };
-
-            if let Some(val) = sourced.value.get(field.name) {
-                // Field exists - recurse into nested structs
-                collect_missing_fields(val, field_shape, &field_path, missing);
-            } else {
-                // Field is missing - check if it's required
-                let has_default = field.default.is_some();
-                let is_option = field_shape.type_identifier.contains("Option");
-
-                if !has_default && !is_option {
-                    // Required field without default - it's missing
-                    let doc_comment = if field.doc.is_empty() {
-                        None
-                    } else {
-                        Some(field.doc.join("\n"))
-                    };
-                    missing.push(MissingFieldInfo {
-                        field_name: field.name.to_string(),
-                        field_path,
-                        type_name: field_shape.type_identifier.to_string(),
-                        doc_comment,
-                    });
-                }
-            }
-        }
-    }
-
-    // Also recurse into arrays
-    if let ConfigValue::Array(sourced) = value {
-        let element_shape = shape.inner.unwrap_or(shape);
-        for (i, item) in sourced.value.iter().enumerate() {
-            let item_path = if path_prefix.is_empty() {
-                format!("[{}]", i)
-            } else {
-                format!("{}[{}]", path_prefix, i)
-            };
-            collect_missing_fields(item, element_shape, &item_path, missing);
-        }
-    }
-}
-
-/// Information about a missing required field.
-#[derive(Debug, Clone)]
-pub struct MissingFieldInfo {
-    /// Field name (e.g., "email" or "host")
-    pub field_name: String,
-    /// Full path (e.g., "config.server.host")
-    pub field_path: String,
-    /// Type name
-    pub type_name: String,
-    /// Documentation comment if available
-    pub doc_comment: Option<String>,
 }
 
 /// A line to be printed in the config dump.
@@ -616,10 +504,10 @@ fn write_config_values_with_schema(
 fn get_arg_type_name(arg: &ArgSchema) -> String {
     use crate::schema::ValueSchema;
     match arg.value() {
-        ValueSchema::Leaf(leaf) => format!("{:?}", leaf),
-        ValueSchema::Option { .. } => "Option".to_string(),
-        ValueSchema::Vec { .. } => "Vec".to_string(),
-        ValueSchema::Struct { .. } => "Struct".to_string(),
+        ValueSchema::Leaf(leaf) => leaf.shape.to_string(),
+        ValueSchema::Option { shape, .. } => shape.to_string(),
+        ValueSchema::Vec { shape, .. } => shape.to_string(),
+        ValueSchema::Struct { shape, .. } => shape.to_string(),
     }
 }
 

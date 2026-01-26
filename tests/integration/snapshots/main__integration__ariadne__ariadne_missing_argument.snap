@@ -8,9 +8,6 @@ Sources:
   cli --settings.*
   defaults
 
-required_field  ❌ MISSING <LeafSchema { kind: Scalar(String), shap 
-                e: Shape { type_identifier: "String", ty: User(Opa
-                que), layout: Sized(«24 align 8»), def: Scalar, ..
-                 } }>
+required_field  ❌ MISSING <String> 
 
 Run with --help for usage information.

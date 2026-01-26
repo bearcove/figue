@@ -181,7 +181,7 @@ pub struct LeafSchema {
     kind: LeafKind,
     /// Underlying facet shape for defaults and parsing.
     #[facet(skip)]
-    shape: &'static Shape,
+    pub(crate) shape: &'static Shape,
 }
 
 #[derive(Facet, Debug)]

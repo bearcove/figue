@@ -8,6 +8,6 @@ Sources:
   cli --settings.*
   defaults
 
-strings  ❌ MISSING <Vec> 
+strings  ❌ MISSING <Vec<String>> 
 
 Run with --help for usage information.

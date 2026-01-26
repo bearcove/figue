@@ -27,10 +27,11 @@ use crate::builder::Config;
 use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
 use crate::config_value_parser::{fill_defaults_from_shape, from_config_value};
-use crate::dump::{collect_missing_fields, dump_config_with_schema};
+use crate::dump::dump_config_with_schema;
 use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
+use crate::missing::collect_missing_fields;
 use crate::path::Path;
 use crate::provenance::{FileResolution, Override, Provenance};
 use crate::span::Span;
@@ -268,7 +269,11 @@ impl<T: Facet<'static>> Driver<T> {
 
         // Check for missing required fields by walking the schema
         let mut missing_fields = Vec::new();
-        collect_missing_fields(&value_with_defaults, T::SHAPE, "", &mut missing_fields);
+        collect_missing_fields(
+            &value_with_defaults,
+            &self.config.schema,
+            &mut missing_fields,
+        );
 
         if !missing_fields.is_empty() {
             // If the only missing field is the subcommand, show help instead of "missing fields"
@@ -1119,9 +1124,9 @@ mod tests {
     #[test]
     fn test_debug_subcommand_with_builtins_parsing() {
         use crate::config_value_parser::fill_defaults_from_shape;
-        use crate::dump::collect_missing_fields;
         use crate::layers::cli::CliConfigBuilder;
         use crate::layers::cli::parse_cli;
+        use crate::missing::collect_missing_fields;
         use crate::schema::Schema;
 
         // Build schema for the type with subcommand + builtins
@@ -1169,12 +1174,7 @@ mod tests {
 
         // Check for missing fields
         let mut missing_fields = Vec::new();
-        collect_missing_fields(
-            &with_defaults,
-            ArgsWithSubcommandAndBuiltins::SHAPE,
-            "",
-            &mut missing_fields,
-        );
+        collect_missing_fields(&with_defaults, &schema, &mut missing_fields);
         eprintln!("Missing fields: {:?}", missing_fields);
 
         // The test should show what's going wrong
