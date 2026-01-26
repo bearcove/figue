@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use crate::assert_help_snapshot;
 use facet::Facet;

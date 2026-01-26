@@ -2,7 +2,6 @@ use std::{collections::HashMap, hash::RandomState};
 
 use crate::{
     Attr,
-    reflection::{is_config_field, is_counted_field, is_supported_counted_type},
     schema::{
         ArgKind, ArgLevelSchema, ArgSchema, ConfigEnumSchema, ConfigEnumVariantSchema,
         ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, ConfigVecSchema, Docs, LeafKind,
@@ -771,4 +770,23 @@ fn arg_level_from_fields_with_prefix(
         },
         special,
     ))
+}
+
+/// Check if a field is marked with `args::counted`.
+fn is_counted_field(field: &facet_core::Field) -> bool {
+    field.has_attr(Some("args"), "counted")
+}
+
+/// Check if a shape is a supported type for counted fields (integer types).
+const fn is_supported_counted_type(shape: &'static facet_core::Shape) -> bool {
+    use facet_core::{NumericType, PrimitiveType, Type};
+    matches!(
+        shape.ty,
+        Type::Primitive(PrimitiveType::Numeric(NumericType::Integer { .. }))
+    )
+}
+
+/// Check if a field is marked with `args::config`.
+fn is_config_field(field: &facet_core::Field) -> bool {
+    field.has_attr(Some("args"), "config")
 }

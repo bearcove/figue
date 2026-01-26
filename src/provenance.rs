@@ -1,8 +1,6 @@
 //! Provenance tracking for layered configuration.
 //!
 //! This module is under active development and not yet fully wired into the main API.
-#![allow(dead_code)]
-#![allow(deprecated)]
 //!
 //! This module provides types for tracking where configuration values came from,
 //! enabling rich error messages and debugging output.
@@ -41,12 +39,8 @@ use std::vec::Vec;
 
 use camino::Utf8PathBuf;
 use facet::Facet;
-use indexmap::IndexMap;
 
-use crate::config_value::ConfigValue;
 
-/// Type alias for IndexMap with default hasher.
-type ProvenanceMap = IndexMap<String, Provenance, std::hash::RandomState>;
 
 /// Information about a loaded config file.
 ///
@@ -243,14 +237,6 @@ pub struct ConfigResult<T> {
     /// The resolved configuration value.
     pub value: T,
 
-    /// Map from config paths to their provenance.
-    ///
-    /// Keys are dot-separated paths like "config.port" or "config.smtp.host".
-    #[deprecated(
-        note = "preovnance is stored inline in ConfigMap, I don't believe it's necessary here"
-    )]
-    pub provenance: ProvenanceMap,
-
     /// Records of values that were overridden by higher-priority layers.
     pub overrides: Vec<Override>,
 
@@ -259,47 +245,13 @@ pub struct ConfigResult<T> {
 }
 
 impl<T> ConfigResult<T> {
-    /// Create a new config result with just a value (no provenance tracking).
-    #[deprecated(note = "we always want full provenance")]
-    pub fn new(value: T) -> Self {
+    /// Create a new config result.
+    pub fn new(value: T, overrides: Vec<Override>, file_resolution: FileResolution) -> Self {
         Self {
             value,
-            provenance: ProvenanceMap::default(),
-            overrides: Vec::new(),
-            file_resolution: FileResolution::new(),
-        }
-    }
-
-    /// Create a new config result with provenance tracking.
-    #[deprecated(note = "we always want full provenance")]
-    pub fn with_provenance(value: T, provenance: ProvenanceMap, overrides: Vec<Override>) -> Self {
-        Self {
-            value,
-            provenance,
-            overrides,
-            file_resolution: FileResolution::new(),
-        }
-    }
-
-    /// Create a new config result with full tracking.
-    #[deprecated(note = "we always want full provenance")]
-    pub fn with_full_tracking(
-        value: T,
-        provenance: ProvenanceMap,
-        overrides: Vec<Override>,
-        file_resolution: FileResolution,
-    ) -> Self {
-        Self {
-            value,
-            provenance,
             overrides,
             file_resolution,
         }
-    }
-
-    /// Get the provenance for a specific path.
-    pub fn get_provenance(&self, path: &str) -> Option<&Provenance> {
-        self.provenance.get(path)
     }
 
     /// Check if any values were overridden.
@@ -384,126 +336,6 @@ impl FileResolution {
     }
 }
 
-/// Builder for tracking provenance during config resolution.
-#[derive(Debug, Default)]
-pub struct ProvenanceTracker {
-    /// Current provenance map.
-    provenance: ProvenanceMap,
-    /// Recorded overrides.
-    overrides: Vec<Override>,
-}
-
-impl ProvenanceTracker {
-    /// Create a new empty tracker.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record a provenance entry, potentially recording an override.
-    ///
-    /// If a value already exists at this path with a lower priority,
-    /// it will be recorded as overridden.
-    pub fn record(&mut self, path: impl Into<String>, provenance: Provenance) {
-        let path = path.into();
-        if let Some(existing) = self.provenance.get(&path) {
-            // Record override if new provenance has higher priority
-            if provenance.priority() > existing.priority() {
-                self.overrides.push(Override::new(
-                    path.clone(),
-                    provenance.clone(),
-                    existing.clone(),
-                ));
-            }
-        }
-        self.provenance.insert(path, provenance);
-    }
-
-    /// Record a provenance entry without checking for overrides.
-    ///
-    /// Use this when you know the entry doesn't exist yet.
-    pub fn record_new(&mut self, path: impl Into<String>, provenance: Provenance) {
-        self.provenance.insert(path.into(), provenance);
-    }
-
-    /// Finish tracking and produce the final maps.
-    pub fn finish(self) -> (ProvenanceMap, Vec<Override>) {
-        (self.provenance, self.overrides)
-    }
-
-    /// Build a ConfigResult with the tracked provenance.
-    pub fn into_result<T>(self, value: T) -> ConfigResult<T> {
-        let (provenance, overrides) = self.finish();
-        ConfigResult::with_provenance(value, provenance, overrides)
-    }
-}
-
-/// Collect provenance from all values in a ConfigValue tree.
-pub(crate) fn collect_provenance(
-    value: &ConfigValue,
-    path: &str,
-) -> indexmap::IndexMap<String, Provenance, std::hash::RandomState> {
-    let mut map = indexmap::IndexMap::default();
-    collect_provenance_inner(value, path, &mut map);
-    map
-}
-
-fn collect_provenance_inner(
-    value: &ConfigValue,
-    path: &str,
-    map: &mut indexmap::IndexMap<String, Provenance, std::hash::RandomState>,
-) {
-    let prov = match value {
-        ConfigValue::Null(s) => s.provenance.as_ref(),
-        ConfigValue::Bool(s) => s.provenance.as_ref(),
-        ConfigValue::Integer(s) => s.provenance.as_ref(),
-        ConfigValue::Float(s) => s.provenance.as_ref(),
-        ConfigValue::String(s) => s.provenance.as_ref(),
-        ConfigValue::Array(s) => s.provenance.as_ref(),
-        ConfigValue::Object(s) => s.provenance.as_ref(),
-        ConfigValue::Enum(s) => s.provenance.as_ref(),
-    };
-
-    if let Some(prov) = prov
-        && !path.is_empty()
-    {
-        map.insert(path.to_string(), prov.clone());
-    }
-
-    // Recurse into children
-    match value {
-        ConfigValue::Array(arr) => {
-            for (i, item) in arr.value.iter().enumerate() {
-                let item_path = if path.is_empty() {
-                    format!("{i}")
-                } else {
-                    format!("{path}[{i}]")
-                };
-                collect_provenance_inner(item, &item_path, map);
-            }
-        }
-        ConfigValue::Object(obj) => {
-            for (key, val) in &obj.value {
-                let key_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                collect_provenance_inner(val, &key_path, map);
-            }
-        }
-        ConfigValue::Enum(e) => {
-            for (key, val) in &e.value.fields {
-                let key_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                collect_provenance_inner(val, &key_path, map);
-            }
-        }
-        _ => {}
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -576,42 +408,8 @@ mod tests {
 
     #[test]
     fn test_config_result() {
-        let result = ConfigResult::new(42);
+        let result = ConfigResult::new(42, Vec::new(), FileResolution::new());
         assert_eq!(result.value, 42);
-        assert!(result.provenance.is_empty());
         assert!(!result.has_overrides());
-    }
-
-    #[test]
-    fn test_provenance_tracker() {
-        let mut tracker = ProvenanceTracker::new();
-
-        // First, record a file value
-        let file = Arc::new(ConfigFile::new("config.json", "{}"));
-        tracker.record("config.port", Provenance::file(file, "port", 0, 4));
-
-        // Then override with env
-        tracker.record("config.port", Provenance::env("REEF__PORT", "9000"));
-
-        // Then override with CLI
-        tracker.record("config.port", Provenance::cli("--config.port", "8080"));
-
-        let (provenance, overrides) = tracker.finish();
-
-        // Final provenance should be CLI
-        assert!(provenance.get("config.port").unwrap().is_cli());
-
-        // Should have two override records
-        assert_eq!(overrides.len(), 2);
-    }
-
-    #[test]
-    fn test_provenance_tracker_into_result() {
-        let mut tracker = ProvenanceTracker::new();
-        tracker.record_new("config.port", Provenance::cli("--port", "8080"));
-
-        let result = tracker.into_result(8080u16);
-        assert_eq!(result.value, 8080);
-        assert!(result.get_provenance("config.port").is_some());
     }
 }

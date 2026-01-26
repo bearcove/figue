@@ -16,7 +16,6 @@
 //! - [ ] Add facet-validate pass after deserialization
 //! - [ ] Improve render_pretty() with Ariadne integration
 //! - [ ] Migrate build_traced tests to driver API
-#![allow(dead_code)]
 #![allow(clippy::result_large_err)]
 
 use std::marker::PhantomData;

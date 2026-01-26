@@ -1,7 +1,6 @@
 //! Schema-driven config file parser that outputs ConfigValue with provenance.
 //!
 //! This module is under active development and not yet wired into the main API.
-#![allow(dead_code)]
 //!
 //! This parser:
 //! - Uses the pre-built Schema to validate config structure
@@ -57,10 +56,6 @@ struct ValidPaths {
 impl ValidPaths {
     fn new() -> Self {
         Self::default()
-    }
-
-    fn add_container(&mut self, path: Vec<String>) {
-        self.paths.insert(path);
     }
 
     fn add_leaf(&mut self, path: Vec<String>) {

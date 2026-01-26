@@ -1,7 +1,5 @@
 //! Schema-driven environment variable parser that outputs ConfigValue with provenance.
 //!
-//! This module is under active development and not yet wired into the main API.
-#![allow(dead_code)]
 //!
 //! This parser:
 //! - Uses the pre-built Schema to know the config field structure

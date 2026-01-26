@@ -1,7 +1,6 @@
 //! Schema representation for CLI arguments and config.
 //!
 //! This module is under active development and not yet fully wired into the main API.
-#![allow(dead_code)]
 
 use std::hash::RandomState;
 
