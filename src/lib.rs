@@ -7,6 +7,9 @@
 
 extern crate self as figue;
 
+#[macro_use]
+mod macros;
+
 // pub(crate) mod arg;
 pub(crate) mod builder;
 pub(crate) mod completions;
@@ -16,12 +19,10 @@ pub(crate) mod config_value_parser;
 pub(crate) mod diagnostics;
 pub mod driver;
 pub(crate) mod dump;
-// pub(crate) mod env;
 pub(crate) mod error;
 pub(crate) mod help;
 pub(crate) mod layers;
 pub(crate) mod merge;
-// pub(crate) mod parser;
 pub(crate) mod path;
 pub(crate) mod provenance;
 pub(crate) mod reflection;
@@ -94,15 +95,15 @@ pub fn from_slice<T: Facet<'static>>(args: &[&str]) -> Result<T, driver::DriverE
 #[derive(facet::Facet, Default, Debug)]
 pub struct FigueBuiltins {
     /// Show help message and exit.
-    #[facet(crate::named, crate::short = 'h', default)]
+    #[facet(crate::named, crate::short = 'h', crate::help, default)]
     pub help: bool,
 
     /// Show version and exit.
-    #[facet(crate::named, crate::short = 'V', default)]
+    #[facet(crate::named, crate::short = 'V', crate::version, default)]
     pub version: bool,
 
     /// Generate shell completions.
-    #[facet(crate::named, default)]
+    #[facet(crate::named, crate::completions, default)]
     pub completions: Option<Shell>,
 }
 
@@ -147,28 +148,108 @@ mod tests {
         let schema = Schema::from_shape(ArgsWithBuiltins::SHAPE).unwrap();
         let special = schema.special();
 
-        // Help should be detected with path ["builtins", "help"]
+        // With flatten, fields appear at top level - path is just ["help"]
         assert!(special.help.is_some(), "help should be detected");
-        assert_eq!(
-            special.help.as_ref().unwrap(),
-            &vec!["builtins".to_string(), "help".to_string()]
-        );
+        assert_eq!(special.help.as_ref().unwrap(), &vec!["help".to_string()]);
 
-        // Version should be detected with path ["builtins", "version"]
+        // Version at top level
         assert!(special.version.is_some(), "version should be detected");
         assert_eq!(
             special.version.as_ref().unwrap(),
-            &vec!["builtins".to_string(), "version".to_string()]
+            &vec!["version".to_string()]
         );
 
-        // Completions should be detected with path ["builtins", "completions"]
+        // Completions at top level
         assert!(
             special.completions.is_some(),
             "completions should be detected"
         );
         assert_eq!(
             special.completions.as_ref().unwrap(),
-            &vec!["builtins".to_string(), "completions".to_string()]
+            &vec!["completions".to_string()]
+        );
+    }
+
+    // ========================================================================
+    // Tests: Special fields with custom names and nesting
+    // ========================================================================
+
+    /// Special fields can be renamed - detection works via attribute, not field name
+    #[derive(facet::Facet)]
+    struct ArgsWithRenamedHelp {
+        /// Print documentation and exit
+        #[facet(crate::named, crate::help, rename = "print-docs")]
+        show_help: bool,
+
+        /// Show program version
+        #[facet(crate::named, crate::version, rename = "show-version")]
+        show_ver: bool,
+    }
+
+    #[test]
+    fn test_special_fields_renamed() {
+        let schema = Schema::from_shape(ArgsWithRenamedHelp::SHAPE).unwrap();
+        let special = schema.special();
+
+        // Detection is by ATTRIBUTE (crate::help), not field name.
+        // The path uses the EFFECTIVE name (after rename).
+        assert!(
+            special.help.is_some(),
+            "help should be detected via attribute"
+        );
+        assert_eq!(
+            special.help.as_ref().unwrap(),
+            &vec!["print-docs".to_string()],
+            "path should use effective name"
+        );
+
+        assert!(
+            special.version.is_some(),
+            "version should be detected via attribute"
+        );
+        assert_eq!(
+            special.version.as_ref().unwrap(),
+            &vec!["show-version".to_string()],
+            "path should use effective name"
+        );
+    }
+
+    /// Deeply nested special fields (flatten inside flatten)
+    #[derive(facet::Facet)]
+    struct DeepInner {
+        #[facet(crate::named, crate::help, default)]
+        help: bool,
+    }
+
+    #[derive(facet::Facet)]
+    struct DeepMiddle {
+        #[facet(flatten)]
+        inner: DeepInner,
+    }
+
+    #[derive(facet::Facet)]
+    struct ArgsWithDeepFlatten {
+        #[facet(crate::positional)]
+        input: String,
+
+        #[facet(flatten)]
+        middle: DeepMiddle,
+    }
+
+    #[test]
+    fn test_special_fields_deeply_flattened() {
+        let schema = Schema::from_shape(ArgsWithDeepFlatten::SHAPE).unwrap();
+        let special = schema.special();
+
+        // With flatten, all fields bubble up to top level - path is just ["help"]
+        assert!(
+            special.help.is_some(),
+            "help should be detected in deeply flattened struct"
+        );
+        assert_eq!(
+            special.help.as_ref().unwrap(),
+            &vec!["help".to_string()],
+            "flattened fields appear at top level"
         );
     }
 }
@@ -240,5 +321,26 @@ facet::define_attr_grammar! {
         ///
         /// Example: `env_prefix = "MYAPP"` results in `MYAPP__FIELD__NAME` env vars.
         EnvPrefix(Option<&'static str>),
+        /// Marks a field as the help flag.
+        ///
+        /// When this flag is set, the driver shows help and exits with code 0.
+        /// The field should be a `bool`.
+        ///
+        /// Usage: `#[facet(figue::help)]`
+        Help,
+        /// Marks a field as the version flag.
+        ///
+        /// When this flag is set, the driver shows version and exits with code 0.
+        /// The field should be a `bool`.
+        ///
+        /// Usage: `#[facet(figue::version)]`
+        Version,
+        /// Marks a field as the completions flag.
+        ///
+        /// When this flag is set, the driver generates shell completions and exits with code 0.
+        /// The field should be `Option<Shell>`.
+        ///
+        /// Usage: `#[facet(figue::completions)]`
+        Completions,
     }
 }

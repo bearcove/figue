@@ -2,6 +2,7 @@
 
 use crate::assert_diag_snapshot;
 use facet::Facet;
+use facet_testhelpers::test;
 use figue as args;
 
 /// Test tuple variant subcommand with struct payload (like clap's automatic flattening)
@@ -548,7 +549,7 @@ fn test_enum_variant_string_default() {
 
 /// Test nested subcommands wrapped in a struct (bug reproduction)
 /// This is different from test_nested_subcommands because the outer type is a struct, not an enum
-#[test]
+#[facet_testhelpers::test]
 fn test_nested_subcommands_in_struct() {
     #[derive(Facet, Debug, PartialEq)]
     #[repr(u8)]

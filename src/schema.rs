@@ -8,9 +8,48 @@ use std::hash::RandomState;
 use facet::Facet;
 use facet_core::Shape;
 use facet_error as _;
+use heck::ToKebabCase;
 use indexmap::IndexMap;
 
 use crate::path::Path;
+
+/// Wrapper around args IndexMap that provides kebab-case lookup.
+///
+/// Schema stores field names as effective names (snake_case or renamed).
+/// CLI flags come in as kebab-case. This wrapper converts schema keys to
+/// kebab-case during lookup so `--deep-flag` matches `deep_flag` in schema.
+pub struct Args<'a> {
+    inner: &'a IndexMap<String, ArgSchema, RandomState>,
+}
+
+impl<'a> Args<'a> {
+    /// Look up an argument by CLI flag name (kebab-case).
+    /// Returns the (effective_name, schema) pair if found.
+    pub fn get(&self, flag_name: &str) -> Option<(&'a String, &'a ArgSchema)> {
+        self.inner
+            .iter()
+            .find(|(key, _)| key.to_kebab_case() == flag_name)
+    }
+
+    /// Iterate over all args with their effective names.
+    pub fn iter(&self) -> impl Iterator<Item = (&'a String, &'a ArgSchema)> {
+        self.inner.iter()
+    }
+
+    /// Get the effective names of all args.
+    pub fn keys(&self) -> impl Iterator<Item = &'a String> {
+        self.inner.keys()
+    }
+}
+
+impl<'a> IntoIterator for Args<'a> {
+    type Item = (&'a String, &'a ArgSchema);
+    type IntoIter = indexmap::map::Iter<'a, String, ArgSchema>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
 
 pub(crate) mod error;
 pub(crate) mod from_schema;
@@ -51,15 +90,15 @@ pub struct Schema {
 #[derive(Facet, Default, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct SpecialFields {
-    /// Target path for the `help` field - when true, show help and exit 0.
+    /// Path to the `help` field - when true, show help and exit 0.
     /// The field should be a `bool`.
     pub help: Option<Path>,
 
-    /// Target path for the `completions` field - when set, generate completions and exit 0.
+    /// Path to the `completions` field - when set, generate completions and exit 0.
     /// The field should be `Option<Shell>`.
     pub completions: Option<Path>,
 
-    /// Target path for the `version` field - when true, show version and exit 0.
+    /// Path to the `version` field - when true, show version and exit 0.
     /// The field should be a `bool`.
     pub version: Option<Path>,
 }
@@ -212,13 +251,6 @@ pub struct ArgSchema {
     /// Whether the argument can appear multiple times on the CLI.
     /// True for list-like values and counted flags.
     multiple: bool,
-
-    /// Target path in the struct for this argument's value.
-    ///
-    /// For non-flattened fields, this is just `["field_name"]`.
-    /// For flattened fields, this includes the path through the flattened structs,
-    /// e.g., `["common", "verbose"]` for a `verbose` field inside a flattened `common: CommonArgs`.
-    target_path: Path,
 }
 
 /// A kind of argument
@@ -244,12 +276,6 @@ pub struct ConfigFieldSchema {
 
     /// Value schema for a field
     pub value: ConfigValueSchema,
-
-    /// Target path in the struct for this field's value.
-    ///
-    /// For non-flattened fields, this is just `["field_name"]`.
-    /// For flattened fields, this includes the path through the flattened structs.
-    target_path: Path,
 }
 
 /// Schema for a vec in a config value
@@ -406,8 +432,9 @@ impl Schema {
 
 impl ArgLevelSchema {
     /// Get the named/positional arguments at this level.
-    pub fn args(&self) -> &IndexMap<String, ArgSchema, RandomState> {
-        &self.args
+    /// Returns an `Args` wrapper that provides kebab-case lookup for CLI flags.
+    pub fn args(&self) -> Args<'_> {
+        Args { inner: &self.args }
     }
 
     /// Get the subcommands at this level.
@@ -446,15 +473,6 @@ impl ArgSchema {
     /// Check if this argument can appear multiple times.
     pub fn multiple(&self) -> bool {
         self.multiple
-    }
-
-    /// Get the target path for this argument.
-    ///
-    /// For non-flattened fields, this is just `["field_name"]`.
-    /// For flattened fields, this includes the path through the flattened structs,
-    /// e.g., `["common", "verbose"]` for a `verbose` field inside a flattened `common: CommonArgs`.
-    pub fn target_path(&self) -> &Path {
-        &self.target_path
     }
 }
 
@@ -495,14 +513,6 @@ impl ConfigStructSchema {
 }
 
 impl ConfigFieldSchema {
-    /// Get the target path for this field.
-    ///
-    /// For non-flattened fields, this is just `["field_name"]`.
-    /// For flattened fields, this includes the path through the flattened structs.
-    pub fn target_path(&self) -> &Path {
-        &self.target_path
-    }
-
     /// Get the value schema for this field.
     pub fn value(&self) -> &ConfigValueSchema {
         &self.value

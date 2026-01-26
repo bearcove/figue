@@ -60,7 +60,7 @@ impl Schema {
             }
         }
 
-        let args = arg_level_from_fields(struct_type.fields, &ctx_root)?;
+        let (args, special) = arg_level_from_fields_with_special(struct_type.fields, &ctx_root)?;
 
         let config = if let Some((field, field_ctx)) = config_field {
             let shape = field.shape();
@@ -77,37 +77,12 @@ impl Schema {
             None
         };
 
-        // Detect special fields by well-known names
-        let special = detect_special_fields(&args);
-
         Ok(Schema {
             args,
             config,
             special,
         })
     }
-}
-
-/// Detect special fields (help, version, completions) by their well-known names.
-fn detect_special_fields(args: &ArgLevelSchema) -> SpecialFields {
-    let mut special = SpecialFields::default();
-
-    for (name, arg_schema) in args.args() {
-        match name.as_str() {
-            "help" => {
-                special.help = Some(arg_schema.target_path().clone());
-            }
-            "version" => {
-                special.version = Some(arg_schema.target_path().clone());
-            }
-            "completions" => {
-                special.completions = Some(arg_schema.target_path().clone());
-            }
-            _ => {}
-        }
-    }
-
-    special
 }
 
 fn has_any_args_attr(field: &Field) -> bool {
@@ -175,11 +150,7 @@ fn enum_variants(enum_type: EnumType) -> Vec<String> {
 }
 
 fn variant_cli_name(variant: &Variant) -> String {
-    variant
-        .get_builtin_attr("rename")
-        .and_then(|attr| attr.get_as::<&str>())
-        .map(|s| (*s).to_string())
-        .unwrap_or_else(|| variant.name.to_kebab_case())
+    variant.effective_name().to_string()
 }
 
 fn leaf_schema_from_shape(
@@ -295,9 +266,9 @@ fn config_struct_schema_from_shape_with_prefix(
                 }
             };
 
-            // Build the new path prefix including this field
+            // Build the new path prefix including this field's effective name
             let mut new_prefix = path_prefix.clone();
-            new_prefix.push(field.name.to_string());
+            new_prefix.push(field.effective_name().to_string());
 
             // Recursively process the inner struct's fields
             let inner = config_struct_schema_from_shape_with_prefix(
@@ -324,22 +295,14 @@ fn config_struct_schema_from_shape_with_prefix(
             continue;
         }
 
-        // Non-flattened field - add with proper target_path
+        // Non-flattened field
         let docs = docs_from_lines(field.doc);
         let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
-        // Build target path: prefix + this field's name
-        let mut target_path = path_prefix.clone();
-        target_path.push(field.name.to_string());
+        // Use the effective (serialized) name as the key
+        let effective_name = field.effective_name().to_string();
 
-        fields_map.insert(
-            field.name.to_string(),
-            ConfigFieldSchema {
-                docs,
-                value,
-                target_path,
-            },
-        );
+        fields_map.insert(effective_name, ConfigFieldSchema { docs, value });
     }
 
     Ok(ConfigStructSchema {
@@ -389,6 +352,14 @@ fn arg_level_from_fields(
     fields: &'static [Field],
     ctx: &SchemaErrorContext,
 ) -> Result<ArgLevelSchema, SchemaError> {
+    let (args, _special) = arg_level_from_fields_with_prefix(fields, ctx, Vec::new())?;
+    Ok(args)
+}
+
+fn arg_level_from_fields_with_special(
+    fields: &'static [Field],
+    ctx: &SchemaErrorContext,
+) -> Result<(ArgLevelSchema, SpecialFields), SchemaError> {
     arg_level_from_fields_with_prefix(fields, ctx, Vec::new())
 }
 
@@ -396,10 +367,11 @@ fn arg_level_from_fields_with_prefix(
     fields: &'static [Field],
     ctx: &SchemaErrorContext,
     path_prefix: Vec<String>,
-) -> Result<ArgLevelSchema, SchemaError> {
+) -> Result<(ArgLevelSchema, SpecialFields), SchemaError> {
     let mut args: IndexMap<String, ArgSchema, RandomState> = IndexMap::default();
     let mut subcommands: IndexMap<String, Subcommand, RandomState> = IndexMap::default();
     let mut subcommand_field_name: Option<String> = None;
+    let mut special = SpecialFields::default();
 
     let mut seen_long: HashMap<String, SchemaErrorContext> = HashMap::new();
     let mut seen_short: HashMap<char, SchemaErrorContext> = HashMap::new();
@@ -427,13 +399,24 @@ fn arg_level_from_fields_with_prefix(
                 }
             };
 
-            // Build the new path prefix including this field
-            let mut new_prefix = path_prefix.clone();
-            new_prefix.push(field.name.to_string());
+            // For flatten, fields appear at the CURRENT level in ConfigValue,
+            // so we pass the same path_prefix (don't add the field name)
+            let (inner, inner_special) = arg_level_from_fields_with_prefix(
+                struct_type.fields,
+                &field_ctx,
+                path_prefix.clone(),
+            )?;
 
-            // Recursively process the inner struct's fields
-            let inner =
-                arg_level_from_fields_with_prefix(struct_type.fields, &field_ctx, new_prefix)?;
+            // Merge special fields from the inner struct
+            if inner_special.help.is_some() {
+                special.help = inner_special.help;
+            }
+            if inner_special.version.is_some() {
+                special.version = inner_special.version;
+            }
+            if inner_special.completions.is_some() {
+                special.completions = inner_special.completions;
+            }
 
             // Merge the inner args into our args (checking for conflicts)
             for (name, arg) in inner.args {
@@ -574,9 +557,9 @@ fn arg_level_from_fields_with_prefix(
 
             for variant in enum_type.variants {
                 let name = variant_cli_name(variant);
-                // Use effective_name() for deserialization - facet-format's
-                // find_variant_by_display_name uses effective_name() for matching.
-                let variant_name = variant.effective_name().to_string();
+                // Use the original Rust variant name for deserialization - facet-format
+                // expects the actual variant name (e.g., "List"), not the renamed CLI name ("ls").
+                let variant_name = variant.name.to_string();
                 let docs = docs_from_lines(variant.doc);
                 let variant_fields = variant_fields_for_schema(variant);
                 let variant_ctx = SchemaErrorContext::root(enum_shape).with_variant(name.clone());
@@ -621,6 +604,21 @@ fn arg_level_from_fields_with_prefix(
         };
 
         let value = value_schema_from_shape(field.shape(), &field_ctx)?;
+
+        // Struct types in args must be flattened - CLI can't represent nested structs
+        // without dotted path syntax (which is only for args::config fields)
+        if matches!(value, ValueSchema::Struct { .. }) {
+            return Err(SchemaError::new(
+                field_ctx.clone(),
+                "struct fields in args must use #[facet(flatten)]",
+            )
+            .with_primary_label("this field is a struct type")
+            .with_label(
+                field_ctx.clone(),
+                "add #[facet(flatten)] to include its fields at this level",
+            ));
+        }
+
         #[allow(clippy::nonminimal_bool)]
         let required = {
             let shape = field.shape();
@@ -657,27 +655,42 @@ fn arg_level_from_fields_with_prefix(
         }
 
         let docs = docs_from_lines(field.doc);
+        let effective_name = field.effective_name().to_string();
 
-        // Build target path: prefix + this field's name
-        let mut target_path = path_prefix.clone();
-        target_path.push(field.name.to_string());
+        // Build the full path for this field (for special field detection)
+        // The path uses the EFFECTIVE name (what appears in ConfigValue)
+        let mut field_path = path_prefix.clone();
+        field_path.push(effective_name.clone());
+
+        // Detect special fields by ATTRIBUTE, not field name
+        if field.has_attr(Some("args"), "help") {
+            special.help = Some(field_path.clone());
+        }
+        if field.has_attr(Some("args"), "version") {
+            special.version = Some(field_path.clone());
+        }
+        if field.has_attr(Some("args"), "completions") {
+            special.completions = Some(field_path.clone());
+        }
 
         let arg = ArgSchema {
-            name: field.effective_name().to_string(),
+            name: effective_name.clone(),
             docs,
             kind,
             value,
             required,
             multiple,
-            target_path,
         };
 
-        args.insert(field.effective_name().to_string(), arg);
+        args.insert(effective_name, arg);
     }
 
-    Ok(ArgLevelSchema {
-        args,
-        subcommands,
-        subcommand_field_name,
-    })
+    Ok((
+        ArgLevelSchema {
+            args,
+            subcommands,
+            subcommand_field_name,
+        },
+        special,
+    ))
 }

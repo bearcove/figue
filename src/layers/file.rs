@@ -388,38 +388,17 @@ impl<'a> FileParseContext<'a> {
 
     /// Build a set of all valid key paths from the schema.
     ///
-    /// This uses target_path to understand nested structures created by flatten.
-    /// For example, if we have:
-    ///   - field "log_level" with target_path ["common", "log_level"]
-    ///   - field "debug" with target_path ["common", "debug"]
-    ///
-    /// This returns paths: ["log_level"], ["debug"], ["common"], ["common", "log_level"], ["common", "debug"]
+    /// Each field in the schema is indexed by its effective name (after rename).
+    /// Flattened fields appear directly in the schema at their effective name.
     fn build_valid_paths(&self, schema: &ConfigStructSchema) -> ValidPaths {
         let mut valid = ValidPaths::new();
 
         for (field_name, field_schema) in schema.fields() {
-            let target_path = field_schema.target_path();
+            // Add this field as a valid leaf path
+            valid.add_leaf(vec![field_name.clone()]);
 
-            if target_path.len() == 1 && target_path[0] == *field_name {
-                // Non-flattened field - add as direct key
-                valid.add_leaf(vec![field_name.clone()]);
-
-                // If it's a struct, recurse to add nested paths
-                self.add_nested_paths(field_schema.value(), vec![field_name.clone()], &mut valid);
-            } else {
-                // Flattened field - target_path tells us the actual nested location
-                // Add all intermediate paths as valid containers
-                for i in 0..target_path.len() {
-                    let prefix: Vec<String> = target_path[..=i].to_vec();
-                    if i < target_path.len() - 1 {
-                        valid.add_container(prefix);
-                    } else {
-                        valid.add_leaf(prefix.clone());
-                        // If it's a struct, recurse to add nested paths
-                        self.add_nested_paths(field_schema.value(), prefix, &mut valid);
-                    }
-                }
-            }
+            // If it's a struct, recurse to add nested paths
+            self.add_nested_paths(field_schema.value(), vec![field_name.clone()], &mut valid);
         }
 
         valid
@@ -857,11 +836,10 @@ mod tests {
     }
 
     #[test]
-    fn test_flatten_config_parses_nested_json() {
-        // JSON file has nested structure matching the flattened struct
-        let file = create_temp_json(
-            r#"{"name": "myapp", "common": {"log_level": "debug", "debug": true}}"#,
-        );
+    fn test_flatten_config_parses_flat_json() {
+        // JSON file has FLAT structure - flattened fields appear at the current level
+        // NOT nested under "common"
+        let file = create_temp_json(r#"{"name": "myapp", "log_level": "debug", "debug": true}"#);
         let path = Utf8PathBuf::from_path_buf(file.path().to_path_buf()).unwrap();
 
         let schema = Schema::from_shape(ArgsWithFlattenedConfig::SHAPE).unwrap();
@@ -875,21 +853,49 @@ mod tests {
             "should have no errors: {:?}",
             result.output.diagnostics
         );
+        assert!(
+            result.output.unused_keys.is_empty(),
+            "should have no unused keys: {:?}",
+            result.output.unused_keys
+        );
 
         let value = result.output.value.expect("should have value");
 
-        // Check that fields are accessible at correct nested paths
+        // All fields appear at the config level (flat)
         let name = get_nested(&value, &["config", "name"]).expect("config.name");
         assert_eq!(get_string(name), Some("myapp"));
 
-        // Flattened fields should be at config.common.log_level
-        let log_level = get_nested(&value, &["config", "common", "log_level"])
-            .expect("config.common.log_level");
+        let log_level = get_nested(&value, &["config", "log_level"]).expect("config.log_level");
         assert_eq!(get_string(log_level), Some("debug"));
 
-        let debug =
-            get_nested(&value, &["config", "common", "debug"]).expect("config.common.debug");
+        let debug = get_nested(&value, &["config", "debug"]).expect("config.debug");
         assert!(matches!(debug, ConfigValue::Bool(b) if b.value));
+    }
+
+    #[test]
+    fn test_flatten_config_rejects_nested_json() {
+        // JSON with nested "common" should be rejected - "common" is not a valid key
+        // because it's flattened (its fields are hoisted to the parent level)
+        let file = create_temp_json(
+            r#"{"name": "myapp", "common": {"log_level": "debug", "debug": true}}"#,
+        );
+        let path = Utf8PathBuf::from_path_buf(file.path().to_path_buf()).unwrap();
+
+        let schema = Schema::from_shape(ArgsWithFlattenedConfig::SHAPE).unwrap();
+        let config = FileConfig::new().path(path);
+
+        let result = parse_file(&schema, &config);
+
+        // Should have unused key for "common"
+        assert!(
+            result
+                .output
+                .unused_keys
+                .iter()
+                .any(|k| k.key.contains(&"common".to_string())),
+            "should reject 'common' key: {:?}",
+            result.output.unused_keys
+        );
     }
 
     /// Database config for nested flatten test
@@ -925,21 +931,16 @@ mod tests {
     }
 
     #[test]
-    fn test_deeply_nested_flatten_config() {
-        // JSON file has deeply nested structure
+    fn test_two_level_flatten_config() {
+        // Two levels of flattening: extended is flattened, and extended contains
+        // flattened common and database. So ALL fields appear at the top level.
         let file = create_temp_json(
             r#"{
                 "app_name": "super-app",
-                "extended": {
-                    "common": {
-                        "log_level": "info",
-                        "debug": false
-                    },
-                    "database": {
-                        "host": "db.example.com",
-                        "port": 5432
-                    }
-                }
+                "log_level": "info",
+                "debug": false,
+                "host": "db.example.com",
+                "port": 5432
             }"#,
         );
         let path = Utf8PathBuf::from_path_buf(file.path().to_path_buf()).unwrap();
@@ -954,32 +955,36 @@ mod tests {
             "should have no errors: {:?}",
             result.output.diagnostics
         );
+        assert!(
+            result.output.unused_keys.is_empty(),
+            "should have no unused keys: {:?}",
+            result.output.unused_keys
+        );
 
         let value = result.output.value.expect("should have value");
 
-        // Check non-flattened field
+        // All fields appear at the config level (flat due to double flatten)
         let app_name = get_nested(&value, &["config", "app_name"]).expect("config.app_name");
         assert_eq!(get_string(app_name), Some("super-app"));
 
-        // Check deeply nested flattened fields
-        let log_level = get_nested(&value, &["config", "extended", "common", "log_level"])
-            .expect("config.extended.common.log_level");
+        let log_level = get_nested(&value, &["config", "log_level"]).expect("config.log_level");
         assert_eq!(get_string(log_level), Some("info"));
 
-        let host = get_nested(&value, &["config", "extended", "database", "host"])
-            .expect("config.extended.database.host");
+        let debug = get_nested(&value, &["config", "debug"]).expect("config.debug");
+        assert!(matches!(debug, ConfigValue::Bool(b) if !b.value));
+
+        let host = get_nested(&value, &["config", "host"]).expect("config.host");
         assert_eq!(get_string(host), Some("db.example.com"));
 
-        let port = get_nested(&value, &["config", "extended", "database", "port"])
-            .expect("config.extended.database.port");
+        let port = get_nested(&value, &["config", "port"]).expect("config.port");
         assert_eq!(get_integer(port), Some(5432));
     }
 
     #[test]
     fn test_flatten_config_unknown_key_detection() {
-        // JSON with an unknown key in the flattened structure
+        // JSON with an unknown key at the flattened level
         let file = create_temp_json(
-            r#"{"name": "myapp", "common": {"log_level": "debug", "debug": true, "unknown": 123}}"#,
+            r#"{"name": "myapp", "log_level": "debug", "debug": true, "unknown_field": 123}"#,
         );
         let path = Utf8PathBuf::from_path_buf(file.path().to_path_buf()).unwrap();
 
@@ -994,8 +999,8 @@ mod tests {
                 .output
                 .unused_keys
                 .iter()
-                .any(|k| k.key.contains(&"unknown".to_string())),
-            "should detect unknown key in flattened struct: {:?}",
+                .any(|k| k.key.contains(&"unknown_field".to_string())),
+            "should detect unknown key: {:?}",
             result.output.unused_keys
         );
     }
