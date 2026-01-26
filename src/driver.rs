@@ -25,7 +25,7 @@ use std::vec::Vec;
 use crate::builder::Config;
 use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
-use crate::config_value_parser::{fill_defaults_from_shape, from_config_value};
+use crate::config_value_parser::{fill_defaults_from_schema, from_config_value};
 use crate::dump::dump_config_with_schema;
 use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
@@ -263,8 +263,8 @@ impl<T: Facet<'static>> Driver<T> {
 
         // Phase 3: Fill defaults and check for missing required fields
         // This must happen BEFORE deserialization so we can show all missing fields at once
-        let value_with_defaults = fill_defaults_from_shape(&merged.value, T::SHAPE);
-        tracing::debug!(value_with_defaults = ?value_with_defaults, "driver: after fill_defaults_from_shape");
+        let value_with_defaults = fill_defaults_from_schema(&merged.value, &self.config.schema);
+        tracing::debug!(value_with_defaults = ?value_with_defaults, "driver: after fill_defaults_from_schema");
 
         // Check for missing required fields by walking the schema
         let mut missing_fields = Vec::new();

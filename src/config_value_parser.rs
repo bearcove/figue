@@ -74,6 +74,454 @@ pub(crate) fn fill_defaults_from_shape(value: &ConfigValue, shape: &'static Shap
     fill_defaults_from_shape_recursive(value, shape, "")
 }
 
+// ============================================================================
+// Schema-based default filling (cleaner approach that reuses Schema's
+// pre-computed field information for flatten, Option, etc.)
+// ============================================================================
+
+use crate::schema::{
+    ArgLevelSchema, ConfigEnumSchema, ConfigStructSchema, ConfigValueSchema, Schema, Subcommand,
+    ValueSchema,
+};
+
+/// Walk the schema and insert default values for missing fields in the ConfigValue tree.
+/// This is the schema-based approach that reuses the Schema's pre-computed field information.
+pub(crate) fn fill_defaults_from_schema(value: &ConfigValue, schema: &Schema) -> ConfigValue {
+    let ConfigValue::Object(sourced) = value else {
+        return value.clone();
+    };
+
+    let mut new_map = sourced.value.clone();
+
+    // Fill defaults for args-level fields (already flattened in schema.args())
+    fill_defaults_from_arg_level(&mut new_map, schema.args(), "");
+
+    // Fill defaults for config field if present
+    if let Some(config_schema) = schema.config() {
+        let config_field_name = config_schema
+            .field_name()
+            .unwrap_or("config")
+            .to_string();
+
+        if let Some(config_value) = new_map.get(&config_field_name) {
+            let filled = fill_defaults_from_config_struct(config_value, config_schema, "");
+            new_map.insert(config_field_name, filled);
+        } else {
+            // Config field missing - create it with defaults
+            let filled = fill_defaults_from_config_struct(
+                &ConfigValue::Object(Sourced::new(IndexMap::default())),
+                config_schema,
+                "",
+            );
+            new_map.insert(config_field_name, filled);
+        }
+    }
+
+    ConfigValue::Object(Sourced {
+        value: new_map,
+        span: sourced.span,
+        provenance: sourced.provenance.clone(),
+    })
+}
+
+/// Fill defaults for args-level fields based on ArgLevelSchema.
+fn fill_defaults_from_arg_level(
+    map: &mut IndexMap<String, ConfigValue, std::hash::RandomState>,
+    arg_level: &ArgLevelSchema,
+    path_prefix: &str,
+) {
+    // The schema's args() already has flattened fields at the right level
+    for (field_name, arg_schema) in arg_level.args() {
+        if !map.contains_key(field_name)
+            && let Some(default_value) =
+                get_default_from_value_schema(arg_schema.value(), path_prefix)
+        {
+            tracing::debug!(
+                field = field_name,
+                ?default_value,
+                "fill_defaults_from_arg_level: inserting default for missing field"
+            );
+            map.insert(field_name.clone(), default_value);
+        }
+    }
+
+    // Handle subcommand fields - if present, fill defaults in the variant's args
+    if let Some(subcommand_field_name) = arg_level.subcommand_field_name()
+        && let Some(ConfigValue::Enum(enum_sourced)) = map.get(subcommand_field_name)
+        && let Some(subcommand) = arg_level.subcommands().get(&enum_sourced.value.variant)
+    {
+        let mut new_fields = enum_sourced.value.fields.clone();
+
+        // Fill defaults for the subcommand's args (which may include flattened tuple args)
+        fill_defaults_from_subcommand(&mut new_fields, subcommand, path_prefix);
+
+        let new_enum = ConfigValue::Enum(Sourced {
+            value: crate::config_value::EnumValue {
+                variant: enum_sourced.value.variant.clone(),
+                fields: new_fields,
+            },
+            span: enum_sourced.span,
+            provenance: enum_sourced.provenance.clone(),
+        });
+        map.insert(subcommand_field_name.to_string(), new_enum);
+    }
+
+    // Recursively fill defaults in nested arg values
+    for (field_name, arg_schema) in arg_level.args() {
+        if let Some(val) = map.get(field_name) {
+            let field_path = if path_prefix.is_empty() {
+                field_name.clone()
+            } else {
+                format!("{}.{}", path_prefix, field_name)
+            };
+            let filled = fill_defaults_from_value_schema(val, arg_schema.value(), &field_path);
+            map.insert(field_name.clone(), filled);
+        }
+    }
+}
+
+/// Fill defaults for a subcommand variant based on its ArgLevelSchema.
+fn fill_defaults_from_subcommand(
+    fields: &mut IndexMap<String, ConfigValue, std::hash::RandomState>,
+    subcommand: &Subcommand,
+    path_prefix: &str,
+) {
+    // Fill defaults for the subcommand's args (already flattened)
+    for (arg_name, arg_schema) in subcommand.args().args() {
+        if !fields.contains_key(arg_name)
+            && let Some(default_value) =
+                get_default_from_value_schema(arg_schema.value(), path_prefix)
+        {
+            fields.insert(arg_name.clone(), default_value);
+        }
+    }
+
+    // Recursively process nested subcommands if any
+    if subcommand.args().has_subcommands()
+        && let Some(nested_subcommand_field) = subcommand.args().subcommand_field_name()
+        && let Some(ConfigValue::Enum(enum_sourced)) = fields.get(nested_subcommand_field)
+        && let Some(nested_subcommand) = subcommand
+            .args()
+            .subcommands()
+            .get(&enum_sourced.value.variant)
+    {
+        let mut new_fields = enum_sourced.value.fields.clone();
+        fill_defaults_from_subcommand(&mut new_fields, nested_subcommand, path_prefix);
+
+        let new_enum = ConfigValue::Enum(Sourced {
+            value: crate::config_value::EnumValue {
+                variant: enum_sourced.value.variant.clone(),
+                fields: new_fields,
+            },
+            span: enum_sourced.span,
+            provenance: enum_sourced.provenance.clone(),
+        });
+        fields.insert(nested_subcommand_field.to_string(), new_enum);
+    }
+
+    // Recursively fill defaults in nested arg values
+    for (arg_name, arg_schema) in subcommand.args().args() {
+        if let Some(val) = fields.get(arg_name) {
+            let field_path = if path_prefix.is_empty() {
+                arg_name.clone()
+            } else {
+                format!("{}.{}", path_prefix, arg_name)
+            };
+            let filled = fill_defaults_from_value_schema(val, arg_schema.value(), &field_path);
+            fields.insert(arg_name.clone(), filled);
+        }
+    }
+}
+
+/// Fill defaults based on ValueSchema (used for arg-level values).
+fn fill_defaults_from_value_schema(
+    value: &ConfigValue,
+    schema: &ValueSchema,
+    path_prefix: &str,
+) -> ConfigValue {
+    match schema {
+        ValueSchema::Option { value: inner, .. } => {
+            fill_defaults_from_value_schema(value, inner, path_prefix)
+        }
+        ValueSchema::Vec { element, .. } => {
+            if let ConfigValue::Array(sourced) = value {
+                let items: Vec<_> = sourced
+                    .value
+                    .iter()
+                    .map(|item| fill_defaults_from_value_schema(item, element, path_prefix))
+                    .collect();
+                ConfigValue::Array(Sourced {
+                    value: items,
+                    span: sourced.span,
+                    provenance: sourced.provenance.clone(),
+                })
+            } else {
+                value.clone()
+            }
+        }
+        ValueSchema::Struct { fields, .. } => {
+            fill_defaults_from_config_struct(value, fields, path_prefix)
+        }
+        ValueSchema::Leaf(_) => value.clone(),
+    }
+}
+
+/// Get a default ConfigValue based on ValueSchema.
+///
+/// This provides implicit CLI-friendly defaults only:
+/// - Option<T> → null (implicit None)
+/// - Struct → empty object (for recursive filling)
+/// - bool → false (CLI flags default to off)
+///
+/// Note: Field-level `#[facet(default)]` attributes are not accessible from the Schema,
+/// so those defaults are handled by facet's deserializer, not here.
+/// We do NOT fill integers with 0 here because fields may have explicit defaults.
+fn get_default_from_value_schema(schema: &ValueSchema, _path_prefix: &str) -> Option<ConfigValue> {
+    match schema {
+        ValueSchema::Option { .. } => Some(ConfigValue::Null(Sourced {
+            value: (),
+            span: None,
+            provenance: Some(Provenance::Default),
+        })),
+        ValueSchema::Vec { .. } => {
+            // Vec without explicit default - don't provide one
+            None
+        }
+        ValueSchema::Struct { .. } => {
+            // Create empty object for recursive filling
+            Some(ConfigValue::Object(Sourced {
+                value: IndexMap::default(),
+                span: None,
+                provenance: Some(Provenance::Default),
+            }))
+        }
+        ValueSchema::Leaf(leaf) => {
+            let shape = leaf.shape;
+
+            // Only provide implicit default for bool (CLI flags default to off)
+            // We don't fill integers because fields may have explicit #[facet(default = N)]
+            // that we can't see from the Schema
+            use facet_core::ScalarType;
+            if let Some(ScalarType::Bool) = shape.scalar_type() {
+                return Some(ConfigValue::Bool(Sourced {
+                    value: false,
+                    span: None,
+                    provenance: Some(Provenance::Default),
+                }));
+            }
+
+            None
+        }
+    }
+}
+
+/// Fill defaults for a struct based on ConfigStructSchema.
+/// The schema already has flattened fields at the right level.
+fn fill_defaults_from_config_struct(
+    value: &ConfigValue,
+    struct_schema: &ConfigStructSchema,
+    path_prefix: &str,
+) -> ConfigValue {
+    let ConfigValue::Object(sourced) = value else {
+        return value.clone();
+    };
+
+    let mut new_map = sourced.value.clone();
+
+    // The schema's fields() already has flattened fields merged in at the right level
+    for (field_name, field_schema) in struct_schema.fields() {
+        if !new_map.contains_key(field_name) {
+            // Field is missing - get default based on value schema
+            if let Some(default_value) =
+                get_default_from_config_value_schema(&field_schema.value, path_prefix)
+            {
+                tracing::debug!(
+                    field = field_name,
+                    ?default_value,
+                    "fill_defaults_from_config_struct: inserting default for missing field"
+                );
+                new_map.insert(field_name.clone(), default_value);
+            }
+        }
+    }
+
+    // Recursively process nested values
+    for (key, val) in new_map.iter_mut() {
+        if let Some(field_schema) = struct_schema.fields().get(key) {
+            let field_path = if path_prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{}.{}", path_prefix, key)
+            };
+            *val = fill_defaults_from_config_value_schema(val, &field_schema.value, &field_path);
+        }
+    }
+
+    ConfigValue::Object(Sourced {
+        value: new_map,
+        span: sourced.span,
+        provenance: sourced.provenance.clone(),
+    })
+}
+
+/// Fill defaults for a value based on ConfigValueSchema.
+fn fill_defaults_from_config_value_schema(
+    value: &ConfigValue,
+    schema: &ConfigValueSchema,
+    path_prefix: &str,
+) -> ConfigValue {
+    match schema {
+        ConfigValueSchema::Option { value: inner, .. } => {
+            // For Option types, recurse with the inner schema
+            fill_defaults_from_config_value_schema(value, inner, path_prefix)
+        }
+        ConfigValueSchema::Struct(struct_schema) => {
+            fill_defaults_from_config_struct(value, struct_schema, path_prefix)
+        }
+        ConfigValueSchema::Vec(vec_schema) => {
+            // Arrays: recursively process elements
+            if let ConfigValue::Array(sourced) = value {
+                let items: Vec<_> = sourced
+                    .value
+                    .iter()
+                    .map(|item| {
+                        fill_defaults_from_config_value_schema(item, vec_schema.element(), path_prefix)
+                    })
+                    .collect();
+                ConfigValue::Array(Sourced {
+                    value: items,
+                    span: sourced.span,
+                    provenance: sourced.provenance.clone(),
+                })
+            } else {
+                value.clone()
+            }
+        }
+        ConfigValueSchema::Enum(enum_schema) => {
+            fill_defaults_from_config_enum(value, enum_schema, path_prefix)
+        }
+        ConfigValueSchema::Leaf(_) => {
+            // Leaf values don't have nested structure to fill
+            value.clone()
+        }
+    }
+}
+
+/// Fill defaults for an enum value based on ConfigEnumSchema.
+fn fill_defaults_from_config_enum(
+    value: &ConfigValue,
+    enum_schema: &ConfigEnumSchema,
+    path_prefix: &str,
+) -> ConfigValue {
+    let ConfigValue::Enum(sourced) = value else {
+        return value.clone();
+    };
+
+    // Find the variant in the schema
+    let Some(variant_schema) = enum_schema.get_variant(&sourced.value.variant) else {
+        return value.clone();
+    };
+
+    // Fill defaults in the variant's fields
+    let mut new_fields = sourced.value.fields.clone();
+
+    // The schema's variant fields already have flattened fields merged in
+    for (field_name, field_schema) in variant_schema.fields() {
+        if !new_fields.contains_key(field_name) {
+            let field_path = if path_prefix.is_empty() {
+                field_name.clone()
+            } else {
+                format!("{}.{}", path_prefix, field_name)
+            };
+            if let Some(default_value) =
+                get_default_from_config_value_schema(&field_schema.value, &field_path)
+            {
+                new_fields.insert(field_name.clone(), default_value);
+            }
+        }
+    }
+
+    // Recursively fill defaults in nested values
+    for (key, val) in new_fields.iter_mut() {
+        if let Some(field_schema) = variant_schema.fields().get(key) {
+            let field_path = if path_prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{}.{}", path_prefix, key)
+            };
+            *val = fill_defaults_from_config_value_schema(val, &field_schema.value, &field_path);
+        }
+    }
+
+    ConfigValue::Enum(Sourced {
+        value: crate::config_value::EnumValue {
+            variant: sourced.value.variant.clone(),
+            fields: new_fields,
+        },
+        span: sourced.span,
+        provenance: sourced.provenance.clone(),
+    })
+}
+
+/// Get a default ConfigValue based on ConfigValueSchema.
+///
+/// This provides implicit CLI-friendly defaults only:
+/// - Struct → empty object (for recursive filling)
+/// - bool → false (CLI flags default to off)
+/// - integers → 0 (counted flags default to 0)
+///
+/// For Option types: we do NOT fill with Null here because fields may have
+/// explicit `#[facet(default)]` attributes that we can't see from the Schema.
+/// Leaving Option fields missing allows facet's deserializer to apply field defaults.
+///
+/// Note: Field-level `#[facet(default)]` attributes are not accessible from the Schema,
+/// so those defaults are handled by facet's deserializer, not here.
+fn get_default_from_config_value_schema(
+    schema: &ConfigValueSchema,
+    _path_prefix: &str,
+) -> Option<ConfigValue> {
+    match schema {
+        ConfigValueSchema::Option { .. } => {
+            // Don't fill Option fields - let facet handle the default
+            // Fields may have #[facet(default)] that we can't see from the Schema
+            None
+        }
+        ConfigValueSchema::Struct(_) => {
+            // Create empty object for recursive filling
+            Some(ConfigValue::Object(Sourced {
+                value: IndexMap::default(),
+                span: None,
+                provenance: Some(Provenance::Default),
+            }))
+        }
+        ConfigValueSchema::Vec(_) => {
+            // Vec without explicit field default - don't provide one
+            None
+        }
+        ConfigValueSchema::Enum(_) => {
+            // Enums need a variant to be selected - can't provide implicit default
+            None
+        }
+        ConfigValueSchema::Leaf(leaf_schema) => {
+            let shape = leaf_schema.shape;
+
+            // Only provide implicit default for bool
+            // We don't fill integers because fields may have explicit #[facet(default = N)]
+            // that we can't see from the Schema
+            use facet_core::ScalarType;
+            if let Some(ScalarType::Bool) = shape.scalar_type() {
+                return Some(ConfigValue::Bool(Sourced {
+                    value: false,
+                    span: None,
+                    provenance: Some(Provenance::Default),
+                }));
+            }
+
+            None
+        }
+    }
+}
+
 fn fill_defaults_from_shape_recursive(
     value: &ConfigValue,
     shape: &'static Shape,
