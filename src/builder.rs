@@ -129,7 +129,7 @@ impl<T> ConfigBuilder<T> {
     /// After calling this, create a `Driver` and call `run()`:
     /// ```ignore
     /// let config = builder::<MyArgs>()?.cli(...).env(...).build();
-    /// let output = Driver::new(config).run().expect_value();
+    /// let output = Driver::new(config).run().unwrap();
     /// ```
     pub fn build(self) -> Config<T> {
         Config {

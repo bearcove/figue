@@ -11,8 +11,7 @@ fn test_error_non_struct_type_not_supported() {
         Something,
         Else,
     }
-    let args: Result<Args, _> = figue::from_slice(&["error", "wrong", "type"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["error", "wrong", "type"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -23,8 +22,7 @@ fn test_error_missing_value_for_argument() {
         #[facet(args::named, args::short = 'j')]
         concurrency: usize,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--concurrency"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--concurrency"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -35,8 +33,7 @@ fn test_error_wrong_type_for_argument() {
         #[facet(args::named, args::short = 'j')]
         concurrency: usize,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--concurrency", "yes"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--concurrency", "yes"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -49,8 +46,7 @@ fn test_error_missing_value_for_argument_short_missed() {
         #[facet(args::named, args::short = 'v')]
         verbose: bool,
     }
-    let args: Result<Args, _> = figue::from_slice(&["-j", "-v"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["-j", "-v"]).unwrap_err();
     eprintln!("{err}");
     assert_diag_snapshot!(err);
 }
@@ -62,8 +58,7 @@ fn test_error_missing_value_for_argument_short_eof() {
         #[facet(args::named, args::short = 'j')]
         concurrency: usize,
     }
-    let args: Result<Args, _> = figue::from_slice(&["-j"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["-j"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -74,8 +69,7 @@ fn test_error_unknown_argument() {
         #[facet(args::named, args::short = 'j')]
         concurrency: usize,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--c0ncurrency"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--c0ncurrency"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -86,8 +80,7 @@ fn test_error_number_outside_range() {
         #[facet(args::named)]
         small: u8,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--small", "1000"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--small", "1000"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -98,8 +91,7 @@ fn test_error_negative_value_for_unsigned() {
         #[facet(args::named)]
         count: usize,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--count", "-10"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--count", "-10"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -110,8 +102,7 @@ fn test_error_out_of_range() {
         #[facet(args::named)]
         byte: u8,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--byte", "1000"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--byte", "1000"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -122,8 +113,7 @@ fn test_error_bool_with_invalid_value_positional() {
         #[facet(args::named)]
         enable: bool,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--enable", "maybe"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--enable", "maybe"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -134,8 +124,7 @@ fn test_error_char_with_multiple_chars() {
         #[facet(args::named)]
         letter: char,
     }
-    let args: Result<Args, _> = figue::from_slice(&["--letter", "abc"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--letter", "abc"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -147,8 +136,7 @@ fn test_error_option_with_multiple_values() {
         maybe: Option<String>,
     }
     // Try to provide a list where an Option is expected
-    let args: Result<Args, _> = figue::from_slice(&["--maybe", "value1", "value2"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--maybe", "value1", "value2"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -160,8 +148,7 @@ fn test_error_unexpected_positional_arg() {
         name: String,
     }
     // Provide a positional arg when none is expected
-    let args: Result<Args, _> = figue::from_slice(&["unexpected", "--name", "value"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["unexpected", "--name", "value"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -175,7 +162,6 @@ fn test_error_invalid_ip_address() {
         address: IpAddr,
     }
     // Provide an invalid IP address
-    let args: Result<Args, _> = figue::from_slice(&["--address", "not-an-ip"]);
-    let err = args.unwrap_err();
+    let err = figue::from_slice::<Args>(&["--address", "not-an-ip"]).unwrap_err();
     assert_diag_snapshot!(err);
 }

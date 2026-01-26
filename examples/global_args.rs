@@ -52,9 +52,6 @@ enum Subcommand {
 }
 
 fn main() {
-    let result: Args = match figue::from_std_args() {
-        Ok(r) => r,
-        Err(e) => panic!("{e}"),
-    };
+    let result: Args = figue::from_std_args().unwrap();
     println!("{}", result.pretty());
 }
