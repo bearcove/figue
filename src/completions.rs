@@ -1,12 +1,14 @@
 //! Shell completion script generation for command-line interfaces.
 //!
 //! This module generates completion scripts for various shells (bash, zsh, fish)
-//! based on Facet type metadata.
+//! based on Schema metadata built from Facet types.
 
-use facet_core::{Def, Facet, Field, Shape, Type, UserType, Variant};
+use facet_core::Facet;
 use heck::ToKebabCase;
 use std::string::String;
 use std::vec::Vec;
+
+use crate::schema::{ArgLevelSchema, ArgSchema, Schema, Subcommand};
 
 /// Supported shells for completion generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, facet::Facet)]
@@ -21,26 +23,49 @@ pub enum Shell {
 }
 
 /// Generate shell completion script for a Facet type.
+///
+/// This is a convenience function that builds a Schema internally.
+/// If you already have a Schema, use `generate_completions_for_schema` instead.
 pub fn generate_completions<T: Facet<'static>>(shell: Shell, program_name: &str) -> String {
     generate_completions_for_shape(T::SHAPE, shell, program_name)
 }
 
 /// Generate shell completion script for a shape.
+///
+/// This is a convenience function that builds a Schema internally.
+/// If you already have a Schema, use `generate_completions_for_schema` instead.
 pub fn generate_completions_for_shape(
-    shape: &'static Shape,
+    shape: &'static facet_core::Shape,
+    shell: Shell,
+    program_name: &str,
+) -> String {
+    let schema = match Schema::from_shape(shape) {
+        Ok(s) => s,
+        Err(_) => {
+            // Fall back to a minimal completion script
+            return format!("# Could not generate completions for {program_name}\n");
+        }
+    };
+
+    generate_completions_for_schema(&schema, shell, program_name)
+}
+
+/// Generate shell completion script from a Schema.
+pub fn generate_completions_for_schema(
+    schema: &Schema,
     shell: Shell,
     program_name: &str,
 ) -> String {
     match shell {
-        Shell::Bash => generate_bash(shape, program_name),
-        Shell::Zsh => generate_zsh(shape, program_name),
-        Shell::Fish => generate_fish(shape, program_name),
+        Shell::Bash => generate_bash(schema.args(), program_name),
+        Shell::Zsh => generate_zsh(schema.args(), program_name),
+        Shell::Fish => generate_fish(schema.args(), program_name),
     }
 }
 
 // === Bash Completion ===
 
-fn generate_bash(shape: &'static Shape, program_name: &str) -> String {
+fn generate_bash(args: &ArgLevelSchema, program_name: &str) -> String {
     let mut out = String::new();
 
     out.push_str(&format!(
@@ -55,7 +80,7 @@ fn generate_bash(shape: &'static Shape, program_name: &str) -> String {
     ));
 
     // Collect flags and subcommands
-    let (flags, subcommands) = collect_options(shape);
+    let (flags, subcommands) = collect_options(args);
 
     // Add flags
     if !flags.is_empty() {
@@ -109,7 +134,7 @@ fn generate_bash(shape: &'static Shape, program_name: &str) -> String {
 
 // === Zsh Completion ===
 
-fn generate_zsh(shape: &'static Shape, program_name: &str) -> String {
+fn generate_zsh(args: &ArgLevelSchema, program_name: &str) -> String {
     let mut out = String::new();
 
     out.push_str(&format!(
@@ -122,7 +147,7 @@ _{program_name}() {{
 "#
     ));
 
-    let (flags, subcommands) = collect_options(shape);
+    let (flags, subcommands) = collect_options(args);
 
     // Add options
     out.push_str("    options=(\n");
@@ -187,12 +212,12 @@ _{program_name}() {{
 
 // === Fish Completion ===
 
-fn generate_fish(shape: &'static Shape, program_name: &str) -> String {
+fn generate_fish(args: &ArgLevelSchema, program_name: &str) -> String {
     let mut out = String::new();
 
     out.push_str(&format!("# Fish completion for {program_name}\n\n"));
 
-    let (flags, subcommands) = collect_options(shape);
+    let (flags, subcommands) = collect_options(args);
 
     // Add flag completions
     for flag in &flags {
@@ -247,72 +272,219 @@ struct SubcommandInfo {
     doc: Option<String>,
 }
 
-fn collect_options(shape: &'static Shape) -> (Vec<FlagInfo>, Vec<SubcommandInfo>) {
+/// Collect flags and subcommands from an ArgLevelSchema.
+///
+/// This uses the Schema which already has:
+/// - Flattened fields at the correct level
+/// - Renames applied (effective names)
+fn collect_options(args: &ArgLevelSchema) -> (Vec<FlagInfo>, Vec<SubcommandInfo>) {
     let mut flags = Vec::new();
     let mut subcommands = Vec::new();
 
-    match &shape.ty {
-        Type::User(UserType::Struct(struct_type)) => {
-            for field in struct_type.fields {
-                if field.has_attr(Some("args"), "subcommand") {
-                    // Collect subcommands from the enum
-                    let field_shape = field.shape();
-                    let enum_shape = if let Def::Option(opt) = field_shape.def {
-                        opt.t
-                    } else {
-                        field_shape
-                    };
+    // Collect flags from args (Schema already handles flatten)
+    for (name, arg) in args.args() {
+        if !arg.kind().is_positional() {
+            flags.push(arg_to_flag(name, arg));
+        }
+    }
 
-                    if let Type::User(UserType::Enum(enum_type)) = enum_shape.ty {
-                        for variant in enum_type.variants {
-                            subcommands.push(variant_to_subcommand(variant));
-                        }
-                    }
-                } else if !field.has_attr(Some("args"), "positional") {
-                    flags.push(field_to_flag(field));
-                }
-            }
-        }
-        Type::User(UserType::Enum(enum_type)) => {
-            // Top-level enum = subcommands
-            for variant in enum_type.variants {
-                subcommands.push(variant_to_subcommand(variant));
-            }
-        }
-        _ => {}
+    // Collect subcommands (Schema already handles renames via cli_name)
+    for sub in args.subcommands().values() {
+        subcommands.push(subcommand_to_info(sub));
     }
 
     (flags, subcommands)
 }
 
-fn field_to_flag(field: &Field) -> FlagInfo {
-    let short = field
-        .get_attr(Some("args"), "short")
-        .and_then(|attr| attr.get_as::<crate::Attr>())
-        .and_then(|attr| {
-            if let crate::Attr::Short(c) = attr {
-                c.or_else(|| field.name.chars().next())
-            } else {
-                None
-            }
-        });
-
+/// Convert an ArgSchema to FlagInfo.
+fn arg_to_flag(name: &str, arg: &ArgSchema) -> FlagInfo {
     FlagInfo {
-        long: field.name.to_kebab_case(),
-        short,
-        doc: field.doc.first().map(|s| s.trim().to_string()),
+        // Use kebab-case for the CLI flag name
+        long: name.to_kebab_case(),
+        short: arg.kind().short(),
+        doc: arg.docs().summary().map(|s| s.trim().to_string()),
     }
 }
 
-fn variant_to_subcommand(variant: &Variant) -> SubcommandInfo {
-    let name = variant
-        .get_builtin_attr("rename")
-        .and_then(|attr| attr.get_as::<&str>())
-        .map(|s| (*s).to_string())
-        .unwrap_or_else(|| variant.name.to_kebab_case());
-
+/// Convert a Subcommand to SubcommandInfo.
+fn subcommand_to_info(sub: &Subcommand) -> SubcommandInfo {
     SubcommandInfo {
-        name,
-        doc: variant.doc.first().map(|s| s.trim().to_string()),
+        // cli_name is already kebab-case and respects renames
+        name: sub.cli_name().to_string(),
+        doc: sub.docs().summary().map(|s| s.trim().to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use facet::Facet;
+    use figue_attrs as args;
+
+    /// Common arguments that can be flattened into other structs
+    #[derive(Facet)]
+    struct CommonArgs {
+        /// Enable verbose output
+        #[facet(args::named, crate::short = 'v')]
+        verbose: bool,
+
+        /// Enable quiet mode
+        #[facet(args::named, crate::short = 'q')]
+        quiet: bool,
+    }
+
+    /// Args struct with flattened common args
+    #[derive(Facet)]
+    struct ArgsWithFlatten {
+        /// Input file
+        #[facet(args::positional)]
+        input: String,
+
+        /// Common options
+        #[facet(flatten)]
+        common: CommonArgs,
+    }
+
+    #[test]
+    fn test_flatten_args_appear_in_completions() {
+        let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).unwrap();
+        let completions = generate_completions_for_schema(&schema, Shell::Bash, "myapp");
+
+        // Flattened fields should appear at top level
+        assert!(
+            completions.contains("--verbose"),
+            "completions should contain --verbose from flattened CommonArgs"
+        );
+        assert!(
+            completions.contains("-v"),
+            "completions should contain -v short flag"
+        );
+        assert!(
+            completions.contains("--quiet"),
+            "completions should contain --quiet from flattened CommonArgs"
+        );
+        assert!(
+            completions.contains("-q"),
+            "completions should contain -q short flag"
+        );
+
+        // The flattened field name 'common' should NOT appear as a flag
+        assert!(
+            !completions.contains("--common"),
+            "completions should not show --common as a flag"
+        );
+    }
+
+    /// Test struct with a renamed field
+    #[derive(Facet)]
+    struct ArgsWithRename {
+        /// Enable debug mode
+        #[facet(args::named, rename = "debug-mode")]
+        debug: bool,
+
+        /// Set output file
+        #[facet(args::named, rename = "out")]
+        output_file: String,
+    }
+
+    #[test]
+    fn test_rename_respected_in_completions() {
+        let schema = Schema::from_shape(ArgsWithRename::SHAPE).unwrap();
+        let completions = generate_completions_for_schema(&schema, Shell::Bash, "myapp");
+
+        // Renamed flags should use the renamed name
+        assert!(
+            completions.contains("--debug-mode"),
+            "completions should contain --debug-mode (renamed from debug)"
+        );
+        assert!(
+            completions.contains("--out"),
+            "completions should contain --out (renamed from output_file)"
+        );
+
+        // Original names should NOT appear
+        assert!(
+            !completions.contains("--debug ") && !completions.contains("--debug\n"),
+            "completions should not show --debug (was renamed to --debug-mode)"
+        );
+        assert!(
+            !completions.contains("--output-file"),
+            "completions should not show --output-file (was renamed to --out)"
+        );
+    }
+
+    /// Subcommand enum with renamed variant
+    #[derive(Facet)]
+    #[repr(u8)]
+    #[allow(dead_code)]
+    enum CommandWithRename {
+        /// List all items
+        List,
+        /// Remove an item
+        #[facet(rename = "rm")]
+        Remove,
+    }
+
+    /// Args with subcommand that has a renamed variant
+    #[derive(Facet)]
+    struct ArgsWithRenamedSubcommand {
+        #[facet(args::subcommand)]
+        command: Option<CommandWithRename>,
+    }
+
+    #[test]
+    fn test_subcommand_rename_respected_in_completions() {
+        let schema = Schema::from_shape(ArgsWithRenamedSubcommand::SHAPE).unwrap();
+        let completions = generate_completions_for_schema(&schema, Shell::Bash, "myapp");
+
+        // Should use the CLI name (kebab-case of effective name)
+        // Bash format is: commands="list rm"
+        assert!(
+            completions.contains("list"),
+            "completions should contain 'list' subcommand"
+        );
+        assert!(
+            completions.contains("rm"),
+            "completions should contain 'rm' subcommand (renamed from Remove)"
+        );
+
+        // Original name 'remove' should NOT appear (was renamed to 'rm')
+        // We need to be careful: "remove" should not appear as a standalone subcommand
+        assert!(
+            !completions.contains("remove"),
+            "completions should not show 'remove' (was renamed to 'rm')"
+        );
+    }
+
+    #[test]
+    fn test_zsh_completions_with_docs() {
+        let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).unwrap();
+        let completions = generate_completions_for_schema(&schema, Shell::Zsh, "myapp");
+
+        // Doc comments should appear in zsh completions
+        assert!(
+            completions.contains("verbose output"),
+            "zsh completions should include doc for --verbose"
+        );
+        assert!(
+            completions.contains("quiet mode"),
+            "zsh completions should include doc for --quiet"
+        );
+    }
+
+    #[test]
+    fn test_fish_completions_with_docs() {
+        let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).unwrap();
+        let completions = generate_completions_for_schema(&schema, Shell::Fish, "myapp");
+
+        // Doc comments should appear in fish completions
+        assert!(
+            completions.contains("verbose output"),
+            "fish completions should include doc for --verbose"
+        );
+        assert!(
+            completions.contains("quiet mode"),
+            "fish completions should include doc for --quiet"
+        );
     }
 }
