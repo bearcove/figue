@@ -313,6 +313,13 @@ pub struct ConfigFieldSchema {
     /// The prefixed env var takes priority over aliases.
     env_aliases: Vec<String>,
 
+    /// Whether to perform environment variable substitution on this field's value.
+    ///
+    /// When true, `${VAR}` patterns in the field's string value will be replaced
+    /// with the corresponding environment variable. Supports default values with
+    /// `${VAR:-default}` syntax. Use `$$` to escape a literal `$`.
+    env_subst: bool,
+
     /// Value schema for a field
     pub value: ConfigValueSchema,
 }
@@ -683,6 +690,14 @@ impl ConfigFieldSchema {
     /// to set this field's value, in addition to the standard prefixed name.
     pub fn env_aliases(&self) -> &[String] {
         &self.env_aliases
+    }
+
+    /// Check if environment variable substitution is enabled for this field.
+    ///
+    /// When true, `${VAR}` patterns in the field's string value will be replaced
+    /// with the corresponding environment variable.
+    pub fn env_subst(&self) -> bool {
+        self.env_subst
     }
 }
 

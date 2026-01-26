@@ -27,6 +27,7 @@ use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
 use crate::config_value_parser::{fill_defaults_from_schema, from_config_value};
 use crate::dump::dump_config_with_schema;
+use crate::env_subst::{EnvSubstError, RealEnv, substitute_env_vars};
 use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
@@ -261,9 +262,22 @@ impl<T: Facet<'static>> Driver<T> {
         tracing::debug!(merged_value = ?merged.value, "driver: merged layers");
         let overrides = merged.overrides;
 
+        // Phase 2.5: Environment variable substitution
+        // Substitute ${VAR} patterns in string values where env_subst is enabled
+        let mut merged_value = merged.value;
+        if let Some(config_schema) = self.config.schema.config()
+            && let ConfigValue::Object(ref mut sourced_fields) = merged_value
+            && let Some(config_field_name) = config_schema.field_name()
+            && let Some(config_value) = sourced_fields.value.get_mut(&config_field_name.to_string())
+            && let Err(e) = substitute_env_vars(config_value, config_schema, &RealEnv)
+        {
+            return DriverOutcome::err(DriverError::EnvSubst { error: e });
+        }
+        tracing::debug!(merged_value = ?merged_value, "driver: after env_subst");
+
         // Phase 3: Fill defaults and check for missing required fields
         // This must happen BEFORE deserialization so we can show all missing fields at once
-        let value_with_defaults = fill_defaults_from_schema(&merged.value, &self.config.schema);
+        let value_with_defaults = fill_defaults_from_schema(&merged_value, &self.config.schema);
         tracing::debug!(value_with_defaults = ?value_with_defaults, "driver: after fill_defaults_from_schema");
 
         // Check for missing required fields by walking the schema
@@ -409,7 +423,10 @@ pub struct DriverOutcome<T>(Result<DriverOutput<T>, DriverError>);
 impl<T: std::fmt::Debug> std::fmt::Debug for DriverOutcome<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Ok(output) => f.debug_tuple("DriverOutcome::Ok").field(&output.value).finish(),
+            Ok(output) => f
+                .debug_tuple("DriverOutcome::Ok")
+                .field(&output.value)
+                .finish(),
             Err(e) => f.debug_tuple("DriverOutcome::Err").field(e).finish(),
         }
     }
@@ -480,6 +497,10 @@ impl<T> DriverOutcome<T> {
             }
             Err(DriverError::Builder { error }) => {
                 eprintln!("{}", error);
+                std::process::exit(1);
+            }
+            Err(DriverError::EnvSubst { error }) => {
+                eprintln!("error: {}", error);
                 std::process::exit(1);
             }
         }
@@ -743,6 +764,12 @@ pub enum DriverError {
         /// Version string
         text: String,
     },
+
+    /// Environment variable substitution failed - exit code 1
+    EnvSubst {
+        /// The substitution error
+        error: EnvSubstError,
+    },
 }
 
 impl DriverError {
@@ -754,6 +781,7 @@ impl DriverError {
             DriverError::Help { .. } => 0,
             DriverError::Completions { .. } => 0,
             DriverError::Version { .. } => 0,
+            DriverError::EnvSubst { .. } => 1,
         }
     }
 
@@ -784,6 +812,7 @@ impl std::fmt::Display for DriverError {
             DriverError::Help { text } => write!(f, "{}", text),
             DriverError::Completions { script } => write!(f, "{}", script),
             DriverError::Version { text } => write!(f, "{}", text),
+            DriverError::EnvSubst { error } => write!(f, "{}", error),
         }
     }
 }
@@ -811,6 +840,9 @@ impl std::process::Termination for DriverError {
             }
             DriverError::Builder { error } => {
                 eprintln!("{}", error);
+            }
+            DriverError::EnvSubst { error } => {
+                eprintln!("error: {}", error);
             }
         }
         std::process::ExitCode::from(self.exit_code() as u8)

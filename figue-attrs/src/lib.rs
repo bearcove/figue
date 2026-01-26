@@ -104,6 +104,42 @@ facet::define_attr_grammar! {
         /// }
         /// ```
         EnvAlias(&'static str),
+        /// Enables environment variable substitution for this field.
+        ///
+        /// When enabled, `${VAR}` patterns in the field's value will be replaced
+        /// with the corresponding environment variable. Supports default values
+        /// with `${VAR:-default}` syntax. Use `$$` to escape a literal `$`.
+        ///
+        /// Usage: `#[facet(args::env_subst)]`
+        ///
+        /// Example:
+        /// ```ignore
+        /// #[derive(Facet)]
+        /// struct Config {
+        ///     #[facet(args::env_subst)]
+        ///     data_dir: PathBuf,  // "${BASE_PATH}/data" -> "/var/myapp/data"
+        /// }
+        /// ```
+        EnvSubst,
+        /// Enables environment variable substitution for all direct fields in a struct.
+        ///
+        /// This is equivalent to adding `#[facet(args::env_subst)]` to each direct
+        /// field. Does not propagate to nested structs (mirrors `rename_all` behavior),
+        /// but does apply to flattened fields since they become direct children.
+        ///
+        /// Usage: `#[facet(args::env_subst_all)]`
+        ///
+        /// Example:
+        /// ```ignore
+        /// #[derive(Facet)]
+        /// #[facet(args::env_subst_all)]
+        /// struct Config {
+        ///     data_dir: PathBuf,   // gets env_subst
+        ///     cache_dir: PathBuf,  // gets env_subst
+        ///     nested: Other,       // nested.field does NOT get env_subst
+        /// }
+        /// ```
+        EnvSubstAll,
         /// Marks a field as the help flag.
         ///
         /// When this flag is set, the driver shows help and exits with code 0.

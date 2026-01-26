@@ -130,6 +130,19 @@ fn extract_env_aliases(field: &Field) -> Vec<String> {
     aliases
 }
 
+/// Check if a field has `#[facet(args::env_subst)]` attribute.
+fn has_env_subst(field: &Field) -> bool {
+    field.has_attr(Some("args"), "env_subst")
+}
+
+/// Check if a shape (struct) has `#[facet(args::env_subst_all)]` attribute.
+fn has_env_subst_all(shape: &'static Shape) -> bool {
+    shape
+        .attributes
+        .iter()
+        .any(|attr| attr.ns == Some("args") && attr.key == "env_subst_all")
+}
+
 fn docs_from_lines(lines: &'static [&'static str]) -> Docs {
     if lines.is_empty() {
         return Docs::default();
@@ -281,6 +294,7 @@ fn config_enum_schema_from_shape(
             let field_docs = docs_from_lines(field.doc);
             let sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
             let env_aliases = extract_env_aliases(field);
+            let env_subst = has_env_subst(field);
             let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
             fields.insert(
@@ -289,6 +303,7 @@ fn config_enum_schema_from_shape(
                     docs: field_docs,
                     sensitive,
                     env_aliases,
+                    env_subst,
                     value,
                 },
             );
@@ -309,15 +324,16 @@ fn config_struct_schema_from_shape(
     field_name: Option<String>,
     env_prefix: Option<String>,
 ) -> Result<ConfigStructSchema, SchemaError> {
-    config_struct_schema_from_shape_with_prefix(shape, ctx, field_name, env_prefix, Vec::new())
+    config_struct_schema_from_shape_inner(shape, ctx, field_name, env_prefix, Vec::new(), false)
 }
 
-fn config_struct_schema_from_shape_with_prefix(
+fn config_struct_schema_from_shape_inner(
     shape: &'static Shape,
     ctx: &SchemaErrorContext,
     field_name: Option<String>,
     env_prefix: Option<String>,
     path_prefix: Vec<String>,
+    parent_env_subst_all: bool,
 ) -> Result<ConfigStructSchema, SchemaError> {
     let struct_type = match &shape.ty {
         Type::User(UserType::Struct(s)) => *s,
@@ -328,6 +344,13 @@ fn config_struct_schema_from_shape_with_prefix(
             ));
         }
     };
+
+    // Check if this struct has env_subst_all - applies to direct children only
+    let this_env_subst_all = has_env_subst_all(shape);
+    // For direct children, env_subst is enabled if either:
+    // - The parent passed down env_subst_all (for flattened fields)
+    // - This struct has env_subst_all
+    let apply_env_subst_to_children = parent_env_subst_all || this_env_subst_all;
 
     let mut fields_map: IndexMap<String, ConfigFieldSchema, RandomState> = IndexMap::default();
 
@@ -353,12 +376,14 @@ fn config_struct_schema_from_shape_with_prefix(
 
             // Recursively process the inner struct's fields
             // Nested flattened structs don't have their own env_prefix
-            let inner = config_struct_schema_from_shape_with_prefix(
+            // Pass down env_subst_all so flattened fields inherit it (they become direct children)
+            let inner = config_struct_schema_from_shape_inner(
                 inner_shape,
                 &field_ctx,
                 None,
                 None,
                 new_prefix,
+                apply_env_subst_to_children,
             )?;
 
             // Merge the inner fields into our fields (checking for conflicts)
@@ -384,6 +409,11 @@ fn config_struct_schema_from_shape_with_prefix(
         let env_aliases = extract_env_aliases(field);
         let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
+        // env_subst is enabled if:
+        // - The field has #[facet(args::env_subst)] directly, OR
+        // - The parent struct has env_subst_all (applies to direct children)
+        let env_subst = has_env_subst(field) || apply_env_subst_to_children;
+
         // Use the effective (serialized) name as the key
         let effective_name = field.effective_name().to_string();
 
@@ -393,6 +423,7 @@ fn config_struct_schema_from_shape_with_prefix(
                 docs,
                 sensitive,
                 env_aliases,
+                env_subst,
                 value,
             },
         );
