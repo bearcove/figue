@@ -92,7 +92,7 @@ fn main() {
         println!("Args: {:?}", args_vec);
         println!("{}", "=".repeat(80));
 
-        let result = args::from_slice::<GitArgs>(args_vec);
+        let result = args::from_slice::<GitArgs>(args_vec).into_result();
         match result {
             Ok(_) => println!("✓ Successfully parsed arguments"),
             Err(e) => {

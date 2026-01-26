@@ -9,7 +9,7 @@
 //! # TODO
 //! - [x] Wire override tracking from merge result into DriverReport
 //! - [x] Define DriverError enum (Failed, Help, Completions, Version)
-//! - [x] Implement expect_value() on DriverResult
+//! - [x] Implement unwrap() on DriverResult
 //! - [x] Add figue::help, figue::completions, figue::version attribute detection
 //! - [x] Handle special fields in Driver::run() before deserialization
 //! - [ ] Collect unused keys from layer parsers into LayerOutput
@@ -100,8 +100,12 @@ impl<T: Facet<'static>> Driver<T> {
         }
     }
 
-    /// Execute the driver and return a fully-typed value plus a report.
-    pub fn run(self) -> Result<DriverOutput<T>, DriverError> {
+    /// Execute the driver and return an outcome.
+    ///
+    /// The returned `DriverOutcome` must be handled explicitly:
+    /// - Use `.unwrap()` for automatic exit handling (recommended)
+    /// - Use `.into_result()` if you need manual control
+    pub fn run(self) -> DriverOutcome<T> {
         let _ = self.core;
 
         let mut layers = ConfigLayers::default();
@@ -182,7 +186,7 @@ impl<T: Facet<'static>> Driver<T> {
                     &subcommand_path,
                     &help_config,
                 );
-                return Err(DriverError::Help { text });
+                return DriverOutcome::err(DriverError::Help { text });
             }
 
             // Check for --version
@@ -204,7 +208,7 @@ impl<T: Facet<'static>> Driver<T> {
                     .or_else(|| std::env::args().next())
                     .unwrap_or_else(|| "program".to_string());
                 let text = format!("{} {}", program_name, version);
-                return Err(DriverError::Version { text });
+                return DriverOutcome::err(DriverError::Version { text });
             }
 
             // Check for --completions <shell>
@@ -221,7 +225,7 @@ impl<T: Facet<'static>> Driver<T> {
                         .or_else(|| std::env::args().next())
                         .unwrap_or_else(|| "program".to_string());
                     let script = generate_completions_for_shape(T::SHAPE, shell, &program_name);
-                    return Err(DriverError::Completions { script });
+                    return DriverOutcome::err(DriverError::Completions { script });
                 }
             }
         }
@@ -231,7 +235,7 @@ impl<T: Facet<'static>> Driver<T> {
             .iter()
             .any(|d| d.severity == Severity::Error);
         if has_errors {
-            return Err(DriverError::Failed {
+            return DriverOutcome::err(DriverError::Failed {
                 report: Box::new(DriverReport {
                     diagnostics: all_diagnostics,
                     layers,
@@ -288,7 +292,7 @@ impl<T: Facet<'static>> Driver<T> {
                     .unwrap_or_default();
 
                 let help = generate_help_for_subcommand(&self.config.schema, &[], &help_config);
-                return Err(DriverError::Help { text: help });
+                return DriverOutcome::err(DriverError::Help { text: help });
             }
 
             // Show dump with missing field markers (includes Sources header)
@@ -311,7 +315,7 @@ impl<T: Facet<'static>> Driver<T> {
                 dump, summary
             );
 
-            return Err(DriverError::Failed {
+            return DriverOutcome::err(DriverError::Failed {
                 report: Box::new(DriverReport {
                     diagnostics: vec![Diagnostic {
                         message,
@@ -349,7 +353,7 @@ impl<T: Facet<'static>> Driver<T> {
                     (None, "<unknown>".to_string(), cli_args_source.clone())
                 };
 
-                return Err(DriverError::Failed {
+                return DriverOutcome::err(DriverError::Failed {
                     report: Box::new(DriverReport {
                         diagnostics: vec![Diagnostic {
                             message: e.to_string(),
@@ -367,7 +371,7 @@ impl<T: Facet<'static>> Driver<T> {
             }
         };
 
-        Ok(DriverOutput {
+        DriverOutcome::ok(DriverOutput {
             value,
             report: DriverReport {
                 diagnostics: all_diagnostics,
@@ -391,8 +395,111 @@ fn get_source_for_provenance(provenance: &Provenance, cli_args_source: &str) -> 
     }
 }
 
-/// Result type for driver operations.
-pub type DriverResult<T> = Result<DriverOutput<T>, DriverError>;
+/// Opaque result type for driver operations.
+///
+/// This type intentionally does NOT implement `Try`, so you cannot use `?` on it directly.
+/// This prevents accidentally propagating help/version/completions as errors (which would
+/// cause exit code 1 instead of 0).
+///
+/// Use one of the following methods to extract the value:
+/// - `.unwrap()` - handles exits correctly, returns `T` (recommended for most cases)
+/// - `.into_result()` - for advanced users who want to handle everything themselves
+#[must_use = "this `DriverOutcome` may contain a help/version request that should be handled"]
+pub struct DriverOutcome<T>(Result<DriverOutput<T>, DriverError>);
+
+impl<T: std::fmt::Debug> std::fmt::Debug for DriverOutcome<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Ok(output) => f.debug_tuple("DriverOutcome::Ok").field(&output.value).finish(),
+            Err(e) => f.debug_tuple("DriverOutcome::Err").field(e).finish(),
+        }
+    }
+}
+
+impl<T> DriverOutcome<T> {
+    /// Create a successful outcome.
+    pub fn ok(output: DriverOutput<T>) -> Self {
+        Self(Ok(output))
+    }
+
+    /// Create an error outcome.
+    pub fn err(error: DriverError) -> Self {
+        Self(Err(error))
+    }
+
+    /// Convert to a standard `Result` for manual handling.
+    ///
+    /// **Warning**: If you use `?` on this result and the error is `Help`, `Version`,
+    /// or `Completions`, Rust's default error handling will exit with code 1 instead of 0.
+    /// Consider using `.unwrap()` instead for correct exit behavior.
+    pub fn into_result(self) -> Result<DriverOutput<T>, DriverError> {
+        self.0
+    }
+
+    /// Returns `true` if this is a successful parse (not help/version/error).
+    pub fn is_ok(&self) -> bool {
+        self.0.is_ok()
+    }
+
+    /// Returns `true` if this is an error or early exit request.
+    pub fn is_err(&self) -> bool {
+        self.0.is_err()
+    }
+
+    /// Get the value, or print output and exit.
+    ///
+    /// - On success: prints warnings to stderr, returns value
+    /// - On help/completions/version: prints to stdout, exits with code 0
+    /// - On error: prints diagnostics to stderr, exits with code 1
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn main() {
+    ///     let args = figue::from_std_args::<Args>().unwrap();
+    ///     // use args...
+    /// }
+    /// ```
+    pub fn unwrap(self) -> T {
+        match self.0 {
+            Ok(output) => output.get(),
+            Err(DriverError::Help { text }) => {
+                println!("{}", text);
+                std::process::exit(0);
+            }
+            Err(DriverError::Completions { script }) => {
+                println!("{}", script);
+                std::process::exit(0);
+            }
+            Err(DriverError::Version { text }) => {
+                println!("{}", text);
+                std::process::exit(0);
+            }
+            Err(DriverError::Failed { report }) => {
+                eprintln!("{}", report.render_pretty());
+                std::process::exit(1);
+            }
+            Err(DriverError::Builder { error }) => {
+                eprintln!("{}", error);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// Unwrap the error, panicking if this is a success.
+    ///
+    /// Useful for testing error cases.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this is a successful parse.
+    pub fn unwrap_err(self) -> DriverError {
+        match self.0 {
+            Ok(_) => panic!("called `DriverOutcome::unwrap_err()` on a success"),
+            Err(e) => e,
+        }
+    }
+}
 
 /// Successful driver output: a typed value plus an execution report.
 #[derive(Debug)]
@@ -425,44 +532,6 @@ impl<T> DriverOutput<T> {
         for diagnostic in &self.report.diagnostics {
             if diagnostic.severity == Severity::Warning {
                 eprintln!("{}: {}", diagnostic.severity.as_str(), diagnostic.message);
-            }
-        }
-    }
-}
-
-/// Extension trait for `DriverResult` to handle common exit patterns.
-pub trait DriverResultExt<T> {
-    /// Get the value, or print output and exit.
-    ///
-    /// - On success: prints warnings to stderr, returns value
-    /// - On help/completions/version: prints to stdout, exits 0
-    /// - On error: prints diagnostics to stderr, exits 1
-    fn expect_value(self) -> T;
-}
-
-impl<T> DriverResultExt<T> for DriverResult<T> {
-    fn expect_value(self) -> T {
-        match self {
-            Ok(output) => output.get(),
-            Err(DriverError::Help { text }) => {
-                println!("{}", text);
-                std::process::exit(0);
-            }
-            Err(DriverError::Completions { script }) => {
-                println!("{}", script);
-                std::process::exit(0);
-            }
-            Err(DriverError::Version { text }) => {
-                println!("{}", text);
-                std::process::exit(0);
-            }
-            Err(DriverError::Failed { report }) => {
-                eprintln!("{}", report.render_pretty());
-                std::process::exit(1);
-            }
-            Err(DriverError::Builder { error }) => {
-                eprintln!("{}", error);
-                std::process::exit(1);
             }
         }
     }
@@ -728,6 +797,27 @@ impl std::fmt::Debug for DriverError {
 
 impl std::error::Error for DriverError {}
 
+impl std::process::Termination for DriverError {
+    fn report(self) -> std::process::ExitCode {
+        // Print the appropriate output
+        match &self {
+            DriverError::Help { text } | DriverError::Version { text } => {
+                println!("{}", text);
+            }
+            DriverError::Completions { script } => {
+                println!("{}", script);
+            }
+            DriverError::Failed { report } => {
+                eprintln!("{}", report.render_pretty());
+            }
+            DriverError::Builder { error } => {
+                eprintln!("{}", error);
+            }
+        }
+        std::process::ExitCode::from(self.exit_code() as u8)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,7 +848,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Err(DriverError::Help { text }) => {
@@ -781,7 +871,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         assert!(
             matches!(result, Err(DriverError::Help { .. })),
@@ -798,7 +888,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Err(DriverError::Version { text }) => {
@@ -824,7 +914,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Err(DriverError::Version { text }) => {
@@ -846,7 +936,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Err(DriverError::Completions { script }) => {
@@ -872,7 +962,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Err(DriverError::Completions { script }) => {
@@ -894,7 +984,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Err(DriverError::Completions { script }) => {
@@ -915,7 +1005,7 @@ mod tests {
             .build();
 
         let driver = Driver::new(config);
-        let result = driver.run();
+        let result = driver.run().into_result();
 
         match result {
             Ok(output) => {
@@ -1001,7 +1091,7 @@ mod tests {
             .cli(|cli| cli.args(["build", "--release"]))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
 
         match result {
             Ok(output) => match &output.value.command {
@@ -1025,7 +1115,7 @@ mod tests {
             .help(|h| h.program_name("test-app").version("1.0.0"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
 
         match result {
             Ok(output) => match &output.value.command {
@@ -1047,7 +1137,7 @@ mod tests {
             .cli(|cli| cli.args(["build"]))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
 
         match result {
             Ok(output) => match &output.value.command {
@@ -1069,7 +1159,7 @@ mod tests {
             .cli(|cli| cli.args(["run", "arg1", "arg2"]))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
 
         match result {
             Ok(output) => match &output.value.command {
@@ -1087,37 +1177,31 @@ mod tests {
     #[test]
     fn test_from_slice_with_subcommand() {
         // Test that from_slice (which uses builder internally) works with subcommands
-        let result: Result<ArgsWithSubcommandOnly, _> = crate::from_slice(&["build", "--release"]);
+        let args: ArgsWithSubcommandOnly = crate::from_slice(&["build", "--release"]).unwrap();
 
-        match result {
-            Ok(args) => match &args.command {
-                TestCommand::Build { release } => {
-                    assert!(*release, "release flag should be true");
-                }
-                TestCommand::Run { .. } => {
-                    panic!("expected Build subcommand, got Run");
-                }
-            },
-            Err(e) => panic!("expected success, got error: {:?}", e),
+        match &args.command {
+            TestCommand::Build { release } => {
+                assert!(*release, "release flag should be true");
+            }
+            TestCommand::Run { .. } => {
+                panic!("expected Build subcommand, got Run");
+            }
         }
     }
 
     #[test]
     fn test_from_slice_with_subcommand_and_builtins() {
         // Test that from_slice works with subcommands AND FigueBuiltins
-        let result: Result<ArgsWithSubcommandAndBuiltins, _> =
-            crate::from_slice(&["build", "--release"]);
+        let args: ArgsWithSubcommandAndBuiltins =
+            crate::from_slice(&["build", "--release"]).unwrap();
 
-        match result {
-            Ok(args) => match &args.command {
-                TestCommand::Build { release } => {
-                    assert!(*release, "release flag should be true");
-                }
-                TestCommand::Run { .. } => {
-                    panic!("expected Build subcommand, got Run");
-                }
-            },
-            Err(e) => panic!("expected success, got error: {:?}", e),
+        match &args.command {
+            TestCommand::Build { release } => {
+                assert!(*release, "release flag should be true");
+            }
+            TestCommand::Run { .. } => {
+                panic!("expected Build subcommand, got Run");
+            }
         }
     }
 
@@ -1284,7 +1368,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => {
                 assert!(!output.value.verbose);
@@ -1310,7 +1394,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => {
                 assert!(output.value.verbose, "verbose should be true");
@@ -1336,7 +1420,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 TopLevelCommand::Db { action } => match action {
@@ -1359,7 +1443,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 TopLevelCommand::Db { action } => match action {
@@ -1382,7 +1466,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 TopLevelCommand::Serve { port, host } => {
@@ -1403,7 +1487,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 TopLevelCommand::Serve { port, host } => {
@@ -1424,7 +1508,7 @@ mod tests {
             .help(|h| h.program_name("test-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 TopLevelCommand::Version => {
@@ -1477,7 +1561,7 @@ mod tests {
             .help(|h| h.program_name("pkg-manager"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 PackageCommand::Install(opts) => {
@@ -1498,7 +1582,7 @@ mod tests {
             .help(|h| h.program_name("pkg-manager"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 PackageCommand::Install(opts) => {
@@ -1551,7 +1635,7 @@ mod tests {
             .help(|h| h.program_name("file-tool"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 RenamedCommand::List { all } => {
@@ -1571,7 +1655,7 @@ mod tests {
             .help(|h| h.program_name("file-tool"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 RenamedCommand::Remove { force, path } => {
@@ -1646,7 +1730,7 @@ mod tests {
             .help(|h| h.program_name("deep-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 DeepCommand::Execute { common, target } => {
@@ -1669,7 +1753,7 @@ mod tests {
             .help(|h| h.program_name("deep-app"))
             .build();
 
-        let result = Driver::new(config).run();
+        let result = Driver::new(config).run().into_result();
         match result {
             Ok(output) => match &output.value.command {
                 DeepCommand::Execute { common, target } => {

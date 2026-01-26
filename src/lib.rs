@@ -39,7 +39,7 @@ use facet_core::Facet;
 
 pub use builder::builder;
 pub use completions::{Shell, generate_completions, generate_completions_for_shape};
-pub use driver::{Driver, DriverError, DriverOutput, DriverReport, DriverResult, DriverResultExt};
+pub use driver::{Driver, DriverError, DriverOutcome, DriverOutput, DriverReport};
 pub use error::{ArgsErrorKind, ArgsErrorWithInput};
 pub use help::{HelpConfig, generate_help, generate_help_for_shape};
 pub use layers::env::MockEnv;
@@ -48,7 +48,16 @@ pub use layers::env::MockEnv;
 ///
 /// This is a convenience function for CLI-only parsing (no env vars, no config files).
 /// For layered configuration, use `builder()` instead.
-pub fn from_std_args<T: Facet<'static>>() -> Result<T, driver::DriverError> {
+///
+/// # Example
+///
+/// ```ignore
+/// fn main() {
+///     let args = figue::from_std_args::<Args>().unwrap();
+///     // use args...
+/// }
+/// ```
+pub fn from_std_args<T: Facet<'static>>() -> driver::DriverOutcome<T> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     from_slice(&args_ref)
@@ -58,16 +67,24 @@ pub fn from_std_args<T: Facet<'static>>() -> Result<T, driver::DriverError> {
 ///
 /// This is a convenience function for CLI-only parsing (no env vars, no config files).
 /// For layered configuration, use `builder()` instead.
-pub fn from_slice<T: Facet<'static>>(args: &[&str]) -> Result<T, driver::DriverError> {
-    use crate::driver::{Driver, DriverError};
+///
+/// # Example
+///
+/// ```ignore
+/// fn main() {
+///     let args = figue::from_slice::<Args>(&["--verbose", "input.txt"]).unwrap();
+///     // use args...
+/// }
+/// ```
+pub fn from_slice<T: Facet<'static>>(args: &[&str]) -> driver::DriverOutcome<T> {
+    use crate::driver::{Driver, DriverError, DriverOutcome};
 
-    let config = builder::<T>()
-        .map_err(|e| DriverError::Builder { error: e })?
-        .cli(|cli| cli.args(args.iter().map(|s| s.to_string())))
-        .build();
+    let config = match builder::<T>() {
+        Ok(b) => b.cli(|cli| cli.args(args.iter().map(|s| s.to_string()))).build(),
+        Err(e) => return DriverOutcome::err(DriverError::Builder { error: e }),
+    };
 
-    let driver = Driver::new(config);
-    driver.run().map(|output| output.value)
+    Driver::new(config).run()
 }
 
 /// Standard CLI builtins that can be flattened into your Args struct.

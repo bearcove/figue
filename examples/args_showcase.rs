@@ -7,18 +7,18 @@
 
 use facet::Facet;
 use facet_showcase::{Language, Scenario, ShowcaseRunner};
-use figue::{self as args, DriverError};
+use figue::{self as args, DriverError, DriverOutput};
 
 /// Extension trait for displaying args parse results with Ariadne error formatting.
 trait ArgsResultExt<'a, 'b, T: facet::Facet<'b>> {
     /// Display the result - success values with facet-pretty, errors with Ariadne.
-    fn args_result(self, result: &'b Result<T, DriverError>) -> Self;
+    fn args_result(self, result: &'b Result<DriverOutput<T>, DriverError>) -> Self;
 }
 
 impl<'a, 'b, T: facet::Facet<'b>> ArgsResultExt<'a, 'b, T> for Scenario<'a> {
-    fn args_result(self, result: &'b Result<T, DriverError>) -> Self {
+    fn args_result(self, result: &'b Result<DriverOutput<T>, DriverError>) -> Self {
         match result {
-            Ok(value) => self.success(value),
+            Ok(output) => self.success(&output.value),
             Err(err) if err.is_help() => {
                 // Help text is not an error, display it as output (contains ANSI colors)
                 self.ansi_output(err.help_text().unwrap_or(""))
@@ -229,6 +229,13 @@ fn main() {
 // =============================================================================
 
 fn showcase_simple_parsing(runner: &mut ShowcaseRunner) {
+    let result = args::from_slice::<SimpleArgs>(&[
+        "-v",
+        "-j",
+        "4",
+        "input.txt",
+        "output.txt",
+    ]).into_result();
     runner
         .scenario("Simple Arguments")
         .description("Parse a struct with flags, options, and positional arguments.")
@@ -237,27 +244,23 @@ fn showcase_simple_parsing(runner: &mut ShowcaseRunner) {
             Language::Rust,
             "from_slice(&[\"-v\", \"-j\", \"4\", \"input.txt\", \"output.txt\"])",
         )
-        .args_result(&args::from_slice::<SimpleArgs>(&[
-            "-v",
-            "-j",
-            "4",
-            "input.txt",
-            "output.txt",
-        ]))
+        .args_result(&result)
         .finish();
 }
 
 fn showcase_attached_short_value(runner: &mut ShowcaseRunner) {
+    let result = args::from_slice::<SimpleArgs>(&["-j4", "input.txt"]).into_result();
     runner
         .scenario("Attached Short Flag Value")
         .description("Short flags can have their values attached directly without a space.")
         .target_type::<SimpleArgs>()
         .input(Language::Rust, "from_slice(&[\"-j4\", \"input.txt\"])")
-        .args_result(&args::from_slice::<SimpleArgs>(&["-j4", "input.txt"]))
+        .args_result(&result)
         .finish();
 }
 
 fn showcase_bool_equals_value(runner: &mut ShowcaseRunner) {
+    let result = args::from_slice::<SimpleArgs>(&["--verbose=true", "input.txt"]).into_result();
     runner
         .scenario("Boolean Flag with Explicit Value")
         .description("Boolean flags can be explicitly set to true or false using `=`.")
@@ -266,14 +269,17 @@ fn showcase_bool_equals_value(runner: &mut ShowcaseRunner) {
             Language::Rust,
             "from_slice(&[\"--verbose=true\", \"input.txt\"])",
         )
-        .args_result(&args::from_slice::<SimpleArgs>(&[
-            "--verbose=true",
-            "input.txt",
-        ]))
+        .args_result(&result)
         .finish();
 }
 
 fn showcase_subcommand_parsing(runner: &mut ShowcaseRunner) {
+    let result = args::from_slice::<GitLikeArgs>(&[
+        "clone",
+        "--branch",
+        "main",
+        "https://github.com/user/repo",
+    ]).into_result();
     runner
         .scenario("Subcommands")
         .description("Parse a CLI with subcommands, each with their own arguments.")
@@ -282,16 +288,17 @@ fn showcase_subcommand_parsing(runner: &mut ShowcaseRunner) {
             Language::Rust,
             "from_slice(&[\"clone\", \"--branch\", \"main\", \"https://github.com/user/repo\"])",
         )
-        .args_result(&args::from_slice::<GitLikeArgs>(&[
-            "clone",
-            "--branch",
-            "main",
-            "https://github.com/user/repo",
-        ]))
+        .args_result(&result)
         .finish();
 }
 
 fn showcase_nested_subcommands(runner: &mut ShowcaseRunner) {
+    let result = args::from_slice::<GitLikeArgs>(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/user/repo",
+    ]).into_result();
     runner
         .scenario("Nested Subcommands")
         .description("Parse deeply nested subcommands like `git remote add`.")
@@ -300,16 +307,12 @@ fn showcase_nested_subcommands(runner: &mut ShowcaseRunner) {
             Language::Rust,
             "from_slice(&[\"remote\", \"add\", \"origin\", \"https://github.com/user/repo\"])",
         )
-        .args_result(&args::from_slice::<GitLikeArgs>(&[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/user/repo",
-        ]))
+        .args_result(&result)
         .finish();
 }
 
 fn showcase_short_flag_chaining(runner: &mut ShowcaseRunner) {
+    let result = args::from_slice::<GitLikeArgs>(&["status", "-sb"]).into_result();
     runner
         .scenario("Short Flag Chaining")
         .description(
@@ -317,7 +320,7 @@ fn showcase_short_flag_chaining(runner: &mut ShowcaseRunner) {
         )
         .target_type::<GitLikeArgs>()
         .input(Language::Rust, "from_slice(&[\"status\", \"-sb\"])")
-        .args_result(&args::from_slice::<GitLikeArgs>(&["status", "-sb"]))
+        .args_result(&result)
         .finish();
 }
 
@@ -342,7 +345,7 @@ fn showcase_help_simple(runner: &mut ShowcaseRunner) {
 }
 
 fn showcase_help_auto_detection(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["--help"]);
+    let result = args::from_slice::<SimpleArgs>(&["--help"]).into_result();
 
     runner
         .scenario("Automatic --help Detection")
@@ -411,7 +414,7 @@ fn showcase_completions_fish(runner: &mut ShowcaseRunner) {
 // =============================================================================
 
 fn scenario_unknown_flag(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["--verbos", "input.txt"]);
+    let result = args::from_slice::<SimpleArgs>(&["--verbos", "input.txt"]).into_result();
 
     runner
         .scenario("Unknown Flag")
@@ -423,7 +426,7 @@ fn scenario_unknown_flag(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_unknown_flag_suggestion(runner: &mut ShowcaseRunner) {
-    let result: Result<BuildArgs, _> = args::from_slice(&["--releas"]);
+    let result = args::from_slice::<BuildArgs>(&["--releas"]).into_result();
 
     runner
         .scenario("Unknown Flag with Suggestion")
@@ -435,7 +438,7 @@ fn scenario_unknown_flag_suggestion(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_invalid_short_flag_in_chain(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["-vxyz", "input.txt"]);
+    let result = args::from_slice::<SimpleArgs>(&["-vxyz", "input.txt"]).into_result();
 
     runner
         .scenario("Invalid Short Flag in Chain")
@@ -449,7 +452,7 @@ fn scenario_invalid_short_flag_in_chain(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_triple_dash(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["---verbose", "input.txt"]);
+    let result = args::from_slice::<SimpleArgs>(&["---verbose", "input.txt"]).into_result();
 
     runner
         .scenario("Triple Dash Flag")
@@ -464,7 +467,7 @@ fn scenario_triple_dash(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_single_dash_long_name(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["-verbose", "input.txt"]);
+    let result = args::from_slice::<SimpleArgs>(&["-verbose", "input.txt"]).into_result();
 
     runner
         .scenario("Single Dash with Long Name")
@@ -476,7 +479,7 @@ fn scenario_single_dash_long_name(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_missing_value(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["-j"]);
+    let result = args::from_slice::<SimpleArgs>(&["-j"]).into_result();
 
     runner
         .scenario("Missing Value")
@@ -488,7 +491,7 @@ fn scenario_missing_value(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_missing_required_arg(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["-v"]);
+    let result = args::from_slice::<SimpleArgs>(&["-v"]).into_result();
 
     runner
         .scenario("Missing Required Argument")
@@ -500,7 +503,7 @@ fn scenario_missing_required_arg(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_unexpected_positional(runner: &mut ShowcaseRunner) {
-    let result: Result<BuildArgs, _> = args::from_slice(&["extra", "--release"]);
+    let result = args::from_slice::<BuildArgs>(&["extra", "--release"]).into_result();
 
     runner
         .scenario("Unexpected Positional Argument")
@@ -512,7 +515,7 @@ fn scenario_unexpected_positional(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_unknown_subcommand(runner: &mut ShowcaseRunner) {
-    let result: Result<GitLikeArgs, _> = args::from_slice(&["clon", "https://example.com"]);
+    let result = args::from_slice::<GitLikeArgs>(&["clon", "https://example.com"]).into_result();
 
     runner
         .scenario("Unknown Subcommand")
@@ -529,7 +532,7 @@ fn scenario_unknown_subcommand(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_missing_subcommand(runner: &mut ShowcaseRunner) {
-    let result: Result<GitLikeArgs, _> = args::from_slice(&["--version"]);
+    let result = args::from_slice::<GitLikeArgs>(&["--version"]).into_result();
 
     runner
         .scenario("Missing Subcommand")
@@ -541,7 +544,7 @@ fn scenario_missing_subcommand(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_missing_nested_subcommand_arg(runner: &mut ShowcaseRunner) {
-    let result: Result<GitLikeArgs, _> = args::from_slice(&["remote", "add", "origin"]);
+    let result = args::from_slice::<GitLikeArgs>(&["remote", "add", "origin"]).into_result();
 
     runner
         .scenario("Missing Nested Subcommand Argument")
@@ -556,7 +559,7 @@ fn scenario_missing_nested_subcommand_arg(runner: &mut ShowcaseRunner) {
 }
 
 fn scenario_invalid_value(runner: &mut ShowcaseRunner) {
-    let result: Result<SimpleArgs, _> = args::from_slice(&["-j", "not-a-number", "input.txt"]);
+    let result = args::from_slice::<SimpleArgs>(&["-j", "not-a-number", "input.txt"]).into_result();
 
     runner
         .scenario("Invalid Value Type")

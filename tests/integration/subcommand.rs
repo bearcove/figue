@@ -317,8 +317,7 @@ fn test_unknown_subcommand_error() {
         command: Command,
     }
 
-    let result: Result<Args, _> = figue::from_slice(&["unknown"]);
-    let err = result.unwrap_err();
+    let err = figue::from_slice::<Args>(&["unknown"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -340,8 +339,7 @@ fn test_missing_subcommand_shows_help() {
         command: Command,
     }
 
-    let result: Result<Args, _> = figue::from_slice(&[]);
-    let err = result.unwrap_err();
+    let err = figue::from_slice::<Args>(&[]).unwrap_err();
     // Should return Help, not Failed
     assert!(
         matches!(err, DriverError::Help { .. }),
@@ -381,8 +379,7 @@ fn test_missing_nested_subcommand_error() {
     }
 
     // Test missing nested subcommand - should show helpful error
-    let result: Result<Args, _> = figue::from_slice(&["ci"]);
-    let err = result.unwrap_err();
+    let err = figue::from_slice::<Args>(&["ci"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -417,8 +414,7 @@ fn test_wrong_argument_style_for_nested_subcommand() {
     }
 
     // Test wrong argument style - should suggest correct subcommand usage
-    let result: Result<Args, _> = figue::from_slice(&["ci", "--action", "gen"]);
-    let err = result.unwrap_err();
+    let err = figue::from_slice::<Args>(&["ci", "--action", "gen"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
@@ -453,8 +449,7 @@ fn test_unknown_nested_subcommand_error() {
     }
 
     // Test unknown nested subcommand
-    let result: Result<Args, _> = figue::from_slice(&["ci", "unknown"]);
-    let err = result.unwrap_err();
+    let err = figue::from_slice::<Args>(&["ci", "unknown"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 

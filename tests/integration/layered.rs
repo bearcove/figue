@@ -88,37 +88,31 @@ fn test_layered_all_sources() {
         .build();
 
     let driver = Driver::new(config);
-    let result = driver.run();
+    let args = driver.run().unwrap();
 
-    match result {
-        Ok(output) => {
-            let args = output.value;
-            // CLI: --verbose
-            assert!(args.verbose, "verbose should be true from CLI");
-            // File: host = "0.0.0.0"
-            assert_eq!(args.config.host, "0.0.0.0", "host should come from file");
-            // Env overrides file: port
-            assert_eq!(args.config.port, 4000, "port should be overridden by env");
-            // File: database.url
-            assert_eq!(
-                args.config.database.url, "postgres://localhost/mydb",
-                "database.url should come from file"
-            );
-            // File: database.max_connections
-            assert_eq!(
-                args.config.database.max_connections, 20,
-                "max_connections should come from file"
-            );
-            // Env overrides default: database.timeout_secs
-            assert_eq!(
-                args.config.database.timeout_secs, 60,
-                "timeout_secs should be overridden by env"
-            );
-            // Default: tls is None
-            assert!(args.config.tls.is_none(), "tls should be None (default)");
-        }
-        Err(e) => panic!("expected success, got error: {}", e),
-    }
+    // CLI: --verbose
+    assert!(args.verbose, "verbose should be true from CLI");
+    // File: host = "0.0.0.0"
+    assert_eq!(args.config.host, "0.0.0.0", "host should come from file");
+    // Env overrides file: port
+    assert_eq!(args.config.port, 4000, "port should be overridden by env");
+    // File: database.url
+    assert_eq!(
+        args.config.database.url, "postgres://localhost/mydb",
+        "database.url should come from file"
+    );
+    // File: database.max_connections
+    assert_eq!(
+        args.config.database.max_connections, 20,
+        "max_connections should come from file"
+    );
+    // Env overrides default: database.timeout_secs
+    assert_eq!(
+        args.config.database.timeout_secs, 60,
+        "timeout_secs should be overridden by env"
+    );
+    // Default: tls is None
+    assert!(args.config.tls.is_none(), "tls should be None (default)");
 }
 
 #[test]
@@ -175,33 +169,27 @@ fn test_layered_cli_overrides_all() {
         .build();
 
     let driver = Driver::new(config);
-    let result = driver.run();
+    let args = driver.run().unwrap();
 
-    match result {
-        Ok(output) => {
-            let args = output.value;
-            // CLI wins for host
-            assert_eq!(args.config.host, "cli-host", "host should come from CLI");
-            // CLI wins for port
-            assert_eq!(args.config.port, 3333, "port should come from CLI");
-            // Env wins for database.url (no CLI override)
-            assert_eq!(
-                args.config.database.url, "postgres://env/db",
-                "database.url should come from env"
-            );
-            // File wins for max_connections (no env or CLI override)
-            assert_eq!(
-                args.config.database.max_connections, 100,
-                "max_connections should come from file"
-            );
-            // File wins for timeout_secs (no env or CLI override for this one)
-            assert_eq!(
-                args.config.database.timeout_secs, 999,
-                "timeout_secs should come from file"
-            );
-        }
-        Err(e) => panic!("expected success, got error: {}", e),
-    }
+    // CLI wins for host
+    assert_eq!(args.config.host, "cli-host", "host should come from CLI");
+    // CLI wins for port
+    assert_eq!(args.config.port, 3333, "port should come from CLI");
+    // Env wins for database.url (no CLI override)
+    assert_eq!(
+        args.config.database.url, "postgres://env/db",
+        "database.url should come from env"
+    );
+    // File wins for max_connections (no env or CLI override)
+    assert_eq!(
+        args.config.database.max_connections, 100,
+        "max_connections should come from file"
+    );
+    // File wins for timeout_secs (no env or CLI override for this one)
+    assert_eq!(
+        args.config.database.timeout_secs, 999,
+        "timeout_secs should come from file"
+    );
 }
 
 /// Simpler structure for testing dump output with all sources visible.

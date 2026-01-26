@@ -113,8 +113,7 @@ fn test_error_unknown_in_chain() {
     }
 
     // Test `-axc` where 'x' doesn't exist
-    let result: Result<Args, _> = figue::from_slice(&["-axc"]);
-    let err = result.unwrap_err();
+    let err = figue::from_slice::<Args>(&["-axc"]).unwrap_err();
     assert_diag_snapshot!(err);
 }
 
