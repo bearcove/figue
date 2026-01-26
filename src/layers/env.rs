@@ -34,16 +34,15 @@
 //! - All SCREAMING_SNAKE_CASE
 //! - Double underscore (`__`) as separator (to allow single `_` in field names)
 
-use std::hash::RandomState;
 use std::string::{String, ToString};
 use std::vec::Vec;
 
 use indexmap::IndexMap;
 
-use crate::config_value::{ConfigValue, Sourced};
-use crate::driver::{Diagnostic, LayerOutput, Severity, UnusedKey};
+use crate::driver::LayerOutput;
 use crate::provenance::Provenance;
-use crate::schema::{ConfigEnumSchema, ConfigStructSchema, ConfigValueSchema, Schema};
+use crate::schema::{ConfigStructSchema, ConfigValueSchema, Schema};
+use crate::value_builder::{LeafValue, ValueBuilder};
 
 // ============================================================================
 // EnvSource trait
@@ -205,541 +204,204 @@ impl EnvConfigBuilder {
 /// This reads env vars with the configured prefix and builds a ConfigValue tree
 /// under the schema's config field.
 pub fn parse_env(schema: &Schema, env_config: &EnvConfig, source: &dyn EnvSource) -> LayerOutput {
-    let mut ctx = EnvParseContext::new(schema, env_config);
-    ctx.parse(source);
-    ctx.into_output()
-}
+    // Get the config schema - if there's no config field, we can't parse env vars
+    let Some(config_schema) = schema.config() else {
+        return parse_env_no_config(env_config, source);
+    };
 
-/// Context for parsing environment variables.
-struct EnvParseContext<'a> {
-    env_config: &'a EnvConfig,
-    /// The config field name from schema (e.g., "config" or "settings")
-    config_field_name: Option<&'a str>,
-    /// The config struct schema, if present
-    config_schema: Option<&'a ConfigStructSchema>,
-    /// Result being built: fields under the config object
-    config_fields: IndexMap<String, ConfigValue, RandomState>,
-    /// Unused keys (env vars that don't match schema)
-    unused_keys: Vec<UnusedKey>,
-    /// Diagnostics collected during parsing
-    diagnostics: Vec<Diagnostic>,
-}
+    // Use explicit prefix from config, or fall back to schema's env_prefix
+    let prefix = if env_config.prefix.is_empty() {
+        config_schema.env_prefix().unwrap_or("")
+    } else {
+        &env_config.prefix
+    };
 
-impl<'a> EnvParseContext<'a> {
-    fn new(schema: &'a Schema, env_config: &'a EnvConfig) -> Self {
-        let (config_field_name, config_schema) = if let Some(cs) = schema.config() {
-            (cs.field_name(), Some(cs))
-        } else {
-            (None, None)
-        };
+    let prefix_with_sep = format!("{}__", prefix);
 
-        Self {
-            env_config,
-            config_field_name,
-            config_schema,
-            config_fields: IndexMap::default(),
-            unused_keys: Vec::new(),
-            diagnostics: Vec::new(),
+    // Create a ValueBuilder
+    let mut builder = ValueBuilder::new(config_schema);
+
+    // Track which paths were set by prefixed vars (so aliases don't override them)
+    let mut prefixed_paths: Vec<Vec<String>> = Vec::new();
+
+    // First pass: collect all prefixed env vars (higher priority)
+    for (name, value) in source.vars() {
+        // Check if this var matches our prefix
+        if !name.starts_with(&prefix_with_sep) {
+            continue;
+        }
+
+        // Extract the path after the prefix
+        let rest = &name[prefix_with_sep.len()..];
+        if rest.is_empty() {
+            builder.warn(format!(
+                "invalid environment variable name: {} (empty after prefix)",
+                name
+            ));
+            continue;
+        }
+
+        // Parse the path segments
+        let segments: Vec<&str> = rest.split("__").collect();
+
+        // Check for empty segments
+        if segments.iter().any(|s| s.is_empty()) {
+            builder.warn(format!(
+                "invalid environment variable name: {} (contains empty segment)",
+                name
+            ));
+            continue;
+        }
+
+        // Convert to lowercase for field matching
+        let path: Vec<String> = segments.iter().map(|s| s.to_lowercase()).collect();
+
+        // Create provenance for this env var
+        let prov = Provenance::env(&name, &value);
+
+        // Validate enum values if the target is an enum
+        validate_enum_value_if_applicable(&mut builder, config_schema, &path, &value, &name);
+
+        // Parse the value (handle comma-separated lists)
+        let leaf_value = parse_env_value(&value);
+
+        // Set the value with its provenance
+        if builder.set(&path, leaf_value, None, prov) {
+            prefixed_paths.push(path);
+        } else if env_config.strict {
+            builder.error(format!("unknown configuration key: {}", path.join(".")));
         }
     }
 
-    fn parse(&mut self, source: &dyn EnvSource) {
-        // Use explicit prefix from config, or fall back to schema's env_prefix
-        let prefix = if self.env_config.prefix.is_empty() {
-            self.config_schema
-                .and_then(|cs| cs.env_prefix())
-                .unwrap_or("")
-        } else {
-            &self.env_config.prefix
-        };
+    // Second pass: check env aliases (lower priority than prefixed vars)
+    check_env_aliases(&mut builder, config_schema, source, &[], &prefixed_paths);
 
-        let prefix_with_sep = format!("{}__", prefix);
+    builder.into_output(config_schema.field_name())
+}
 
-        // First pass: collect all prefixed env vars (higher priority)
-        for (name, value) in source.vars() {
-            // Check if this var matches our prefix
-            if !name.starts_with(&prefix_with_sep) {
-                continue;
-            }
+/// Recursively check env aliases for all fields in a config struct.
+fn check_env_aliases(
+    builder: &mut ValueBuilder,
+    schema: &ConfigStructSchema,
+    source: &dyn EnvSource,
+    parent_path: &[String],
+    prefixed_paths: &[Vec<String>],
+) {
+    for (field_name, field_schema) in schema.fields() {
+        let mut field_path = parent_path.to_vec();
+        field_path.push(field_name.clone());
 
-            // Extract the path after the prefix
-            let rest = &name[prefix_with_sep.len()..];
-            if rest.is_empty() {
-                self.emit_warning(format!(
-                    "invalid environment variable name: {} (empty after prefix)",
-                    name
-                ));
-                continue;
-            }
-
-            // Parse the path segments
-            let segments: Vec<&str> = rest.split("__").collect();
-
-            // Check for empty segments
-            if segments.iter().any(|s| s.is_empty()) {
-                self.emit_warning(format!(
-                    "invalid environment variable name: {} (contains empty segment)",
-                    name
-                ));
-                continue;
-            }
-
-            // Convert to lowercase for field matching
-            let path: Vec<String> = segments.iter().map(|s| s.to_lowercase()).collect();
-
-            // If no config schema, all env vars are unused
-            if self.config_schema.is_none() {
-                self.add_unused_key(&path, &name);
-                continue;
-            }
-
-            // Check if path exists in schema and get the target path for insertion
-            let config_schema = self.config_schema.unwrap();
-            let target_path = match self.resolve_path_in_schema(config_schema, &path) {
-                Some(target) => target,
-                None => {
-                    self.add_unused_key(&path, &name);
-                    if self.env_config.strict {
-                        self.emit_error(format!("unknown configuration key: {}", path.join(".")));
-                    }
-                    continue;
-                }
-            };
-
-            // Parse the value with schema awareness and insert it at the target path
-            let config_value = self.parse_value_with_schema(&value, &name, &target_path);
-            self.insert_at_path(&target_path, config_value);
-        }
-
-        // Second pass: check env aliases (lower priority than prefixed vars)
-        // Only set if the field wasn't already set by a prefixed var
-        if let Some(config_schema) = self.config_schema {
-            self.check_env_aliases(config_schema, source, &[]);
-        }
-    }
-
-    /// Recursively check env aliases for all fields in a config struct.
-    fn check_env_aliases(
-        &mut self,
-        schema: &ConfigStructSchema,
-        source: &dyn EnvSource,
-        parent_path: &[String],
-    ) {
-        for (field_name, field_schema) in schema.fields() {
-            let mut field_path = parent_path.to_vec();
-            field_path.push(field_name.clone());
-
-            // Check if this field has aliases and wasn't already set
+        // Check if this field has aliases and wasn't already set by a prefixed var
+        let already_set = prefixed_paths.iter().any(|p| *p == field_path);
+        if !already_set {
             for alias in field_schema.env_aliases() {
-                if !self.has_value_at_path(&field_path)
-                    && let Some(value) = source.get(alias)
-                {
-                    let config_value = self.parse_value_with_schema(&value, alias, &field_path);
-                    self.insert_at_path(&field_path, config_value);
+                if let Some(value) = source.get(alias) {
+                    let prov = Provenance::env(alias, &value);
+                    let leaf_value = parse_env_value(&value);
+                    builder.set(&field_path, leaf_value, None, prov);
                     // Only use the first matching alias
                     break;
                 }
             }
-
-            // Recurse into nested structs
-            match field_schema.value() {
-                ConfigValueSchema::Struct(nested) => {
-                    self.check_env_aliases(nested, source, &field_path);
-                }
-                ConfigValueSchema::Option { value, .. } => {
-                    if let ConfigValueSchema::Struct(nested) = value.as_ref() {
-                        self.check_env_aliases(nested, source, &field_path);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Check if a value exists at the given path in config_fields.
-    fn has_value_at_path(&self, path: &[String]) -> bool {
-        if path.is_empty() {
-            return false;
         }
 
-        let mut current = &self.config_fields;
-        for (i, segment) in path.iter().enumerate() {
-            match current.get(segment) {
-                Some(ConfigValue::Object(obj)) if i < path.len() - 1 => {
-                    current = &obj.value;
-                }
-                Some(_) if i == path.len() - 1 => {
-                    return true;
-                }
-                _ => return false,
-            }
-        }
-        false
-    }
-
-    /// Resolve an input path against the schema, validating it exists.
-    ///
-    /// Returns the path to use for insertion (using the effective names from the schema).
-    /// The input path uses lowercase field names (from env var conversion), and this
-    /// validates they exist in the schema. The returned path uses the schema's field keys
-    /// (effective names after rename).
-    fn resolve_path_in_schema(
-        &self,
-        schema: &ConfigStructSchema,
-        path: &[String],
-    ) -> Option<Vec<String>> {
-        if path.is_empty() {
-            return Some(vec![]);
-        }
-
-        let first = &path[0];
-        if let Some((effective_name, field)) = schema.fields().get_key_value(first) {
-            if path.len() == 1 {
-                // Leaf field - return the effective name
-                return Some(vec![effective_name.clone()]);
-            }
-            // Check nested
-            match field.value() {
-                ConfigValueSchema::Struct(nested) => {
-                    // Recurse into nested struct
-                    if let Some(mut nested_path) = self.resolve_path_in_schema(nested, &path[1..]) {
-                        // Prepend the effective name for this field
-                        let mut result = vec![effective_name.clone()];
-                        result.append(&mut nested_path);
-                        Some(result)
-                    } else {
-                        None
-                    }
-                }
-                ConfigValueSchema::Option { value, .. } => {
-                    // Unwrap option and check inner type
-                    self.resolve_path_in_value_schema(
-                        value.as_ref(),
-                        &path[1..],
-                        effective_name.clone(),
-                    )
-                }
-                ConfigValueSchema::Enum(enum_schema) => {
-                    // Next path segment should be a variant name
-                    self.resolve_path_in_enum(enum_schema, &path[1..], effective_name.clone())
-                }
-                _ => {
-                    // Leaf with more path segments - invalid
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    }
-
-    /// Helper to resolve path through a ConfigValueSchema (handles Option/Struct/Enum).
-    fn resolve_path_in_value_schema(
-        &self,
-        value_schema: &ConfigValueSchema,
-        path: &[String],
-        prefix: String,
-    ) -> Option<Vec<String>> {
-        match value_schema {
-            ConfigValueSchema::Struct(nested) => {
-                if let Some(mut nested_path) = self.resolve_path_in_schema(nested, path) {
-                    let mut result = vec![prefix];
-                    result.append(&mut nested_path);
-                    Some(result)
-                } else {
-                    None
-                }
-            }
-            ConfigValueSchema::Enum(enum_schema) => {
-                self.resolve_path_in_enum(enum_schema, path, prefix)
-            }
-            ConfigValueSchema::Option { value, .. } => {
-                // Recursively unwrap nested Option
-                self.resolve_path_in_value_schema(value.as_ref(), path, prefix)
-            }
-            _ => {
-                // Non-nested type with more path - invalid
-                None
-            }
-        }
-    }
-
-    /// Resolve path within an enum schema.
-    ///
-    /// The first segment of path should be a variant name, and remaining segments
-    /// are fields within that variant.
-    fn resolve_path_in_enum(
-        &self,
-        enum_schema: &ConfigEnumSchema,
-        path: &[String],
-        prefix: String,
-    ) -> Option<Vec<String>> {
-        if path.is_empty() {
-            // Can't set an enum directly via env var path - need to specify variant
-            return None;
-        }
-
-        let variant_name = &path[0];
-
-        // Find variant by case-insensitive match
-        let (effective_variant_name, variant_schema) = enum_schema
-            .variants()
-            .iter()
-            .find(|(name, _)| name.to_lowercase() == *variant_name)?;
-
-        if path.len() == 1 {
-            // Just the variant name, no field - this would set the enum to this variant
-            // without any field data. Return the path including the variant name.
-            return Some(vec![prefix, effective_variant_name.clone()]);
-        }
-
-        // Resolve remaining path within the variant's fields
-        let field_path = &path[1..];
-        let field_name = &field_path[0];
-
-        let (effective_field_name, field_schema) = variant_schema
-            .fields()
-            .iter()
-            .find(|(name, _)| name.to_lowercase() == *field_name)?;
-
-        if field_path.len() == 1 {
-            // Leaf field within the variant
-            return Some(vec![
-                prefix,
-                effective_variant_name.clone(),
-                effective_field_name.clone(),
-            ]);
-        }
-
-        // More path segments - recurse into the field's value schema
+        // Recurse into nested structs
         match field_schema.value() {
             ConfigValueSchema::Struct(nested) => {
-                if let Some(mut nested_path) =
-                    self.resolve_path_in_schema(nested, &field_path[1..])
-                {
-                    let mut result = vec![
-                        prefix,
-                        effective_variant_name.clone(),
-                        effective_field_name.clone(),
-                    ];
-                    result.append(&mut nested_path);
-                    Some(result)
-                } else {
-                    None
+                check_env_aliases(builder, nested, source, &field_path, prefixed_paths);
+            }
+            ConfigValueSchema::Option { value, .. } => {
+                if let ConfigValueSchema::Struct(nested) = value.as_ref() {
+                    check_env_aliases(builder, nested, source, &field_path, prefixed_paths);
                 }
             }
-            ConfigValueSchema::Option { value, .. } => self.resolve_path_in_value_schema(
-                value.as_ref(),
-                &field_path[1..],
-                format!(
-                    "{}.{}.{}",
-                    prefix, effective_variant_name, effective_field_name
-                ),
-            ),
-            ConfigValueSchema::Enum(nested_enum) => {
-                // Nested enum within variant field
-                self.resolve_path_in_enum(
-                    nested_enum,
-                    &field_path[1..],
-                    format!(
-                        "{}.{}.{}",
-                        prefix, effective_variant_name, effective_field_name
-                    ),
-                )
-            }
-            _ => None,
-        }
-    }
-
-    /// Get the ConfigValueSchema for a path, if available.
-    fn get_value_schema_at_path(&self, path: &[String]) -> Option<&ConfigValueSchema> {
-        let config_schema = self.config_schema?;
-        config_schema.get_by_path(&path.to_vec())
-    }
-
-    /// Parse a value with schema awareness.
-    ///
-    /// If the target field is an enum, validates that the value is a known variant.
-    fn parse_value_with_schema(
-        &mut self,
-        value: &str,
-        var_name: &str,
-        target_path: &[String],
-    ) -> ConfigValue {
-        let prov = Some(Provenance::env(var_name, value));
-
-        // Check if we have schema info for this path
-        if let Some(value_schema) = self.get_value_schema_at_path(target_path) {
-            // Unwrap Option wrapper if present
-            let inner_schema = match value_schema {
-                ConfigValueSchema::Option { value: inner, .. } => inner.as_ref(),
-                other => other,
-            };
-
-            // For enum fields, validate the value is a known variant
-            if let ConfigValueSchema::Enum(enum_schema) = inner_schema {
-                let variants = enum_schema.variants();
-                if !variants.contains_key(value) {
-                    // Unknown variant - emit a helpful error
-                    let valid_variants: Vec<&String> = variants.keys().collect();
-                    self.emit_warning(format!(
-                        "{}: unknown variant '{}' for {}. Valid variants are: {}",
-                        var_name,
-                        value,
-                        target_path.join("."),
-                        valid_variants
-                            .iter()
-                            .map(|v| format!("'{}'", v))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-            }
-        }
-
-        // Check for comma-separated list
-        if value.contains(',') {
-            let elements = parse_comma_separated(value);
-            if elements.len() > 1 {
-                // Multiple elements - return as array
-                let array_elements: Vec<ConfigValue> = elements
-                    .into_iter()
-                    .map(|s| {
-                        ConfigValue::String(Sourced {
-                            value: s,
-                            span: None,
-                            provenance: Some(Provenance::env(var_name, value)),
-                        })
-                    })
-                    .collect();
-                return ConfigValue::Array(Sourced {
-                    value: array_elements,
-                    span: None,
-                    provenance: prov,
-                });
-            } else if elements.len() == 1 {
-                // Single element after processing escapes
-                return ConfigValue::String(Sourced {
-                    value: elements.into_iter().next().unwrap(),
-                    span: None,
-                    provenance: prov,
-                });
-            }
-        }
-
-        // Simple string value
-        ConfigValue::String(Sourced {
-            value: value.to_string(),
-            span: None,
-            provenance: prov,
-        })
-    }
-
-    fn insert_at_path(&mut self, path: &[String], value: ConfigValue) {
-        if path.is_empty() {
-            return;
-        }
-
-        if path.len() == 1 {
-            self.config_fields.insert(path[0].clone(), value);
-            return;
-        }
-
-        // Navigate/create nested objects
-        let first = &path[0];
-        let rest = &path[1..];
-
-        let entry = self.config_fields.entry(first.clone()).or_insert_with(|| {
-            ConfigValue::Object(Sourced {
-                value: IndexMap::default(),
-                span: None,
-                provenance: None,
-            })
-        });
-
-        if let ConfigValue::Object(obj) = entry {
-            insert_nested(&mut obj.value, rest, value);
-        }
-    }
-
-    fn add_unused_key(&mut self, path: &[String], var_name: &str) {
-        self.unused_keys.push(UnusedKey {
-            key: path.to_vec(),
-            provenance: Provenance::env(var_name, ""),
-        });
-    }
-
-    fn emit_warning(&mut self, message: String) {
-        self.diagnostics.push(Diagnostic {
-            message,
-            path: None,
-            span: None,
-            severity: Severity::Warning,
-        });
-    }
-
-    fn emit_error(&mut self, message: String) {
-        self.diagnostics.push(Diagnostic {
-            message,
-            path: None,
-            span: None,
-            severity: Severity::Error,
-        });
-    }
-
-    fn into_output(self) -> LayerOutput {
-        let value = if self.config_fields.is_empty() && self.config_field_name.is_none() {
-            // No config field in schema and no values - return empty object
-            Some(ConfigValue::Object(Sourced {
-                value: IndexMap::default(),
-                span: None,
-                provenance: None,
-            }))
-        } else if self.config_fields.is_empty() {
-            // Config field exists but no env vars matched - return object with empty config
-            let mut root = IndexMap::default();
-            if let Some(field_name) = self.config_field_name {
-                root.insert(
-                    field_name.to_string(),
-                    ConfigValue::Object(Sourced {
-                        value: IndexMap::default(),
-                        span: None,
-                        provenance: None,
-                    }),
-                );
-            }
-            Some(ConfigValue::Object(Sourced {
-                value: root,
-                span: None,
-                provenance: None,
-            }))
-        } else {
-            // Wrap config_fields under the config field name
-            let mut root = IndexMap::default();
-            if let Some(field_name) = self.config_field_name {
-                root.insert(
-                    field_name.to_string(),
-                    ConfigValue::Object(Sourced {
-                        value: self.config_fields,
-                        span: None,
-                        provenance: None,
-                    }),
-                );
-            }
-            Some(ConfigValue::Object(Sourced {
-                value: root,
-                span: None,
-                provenance: None,
-            }))
-        };
-
-        LayerOutput {
-            value,
-            unused_keys: self.unused_keys,
-            diagnostics: self.diagnostics,
+            _ => {}
         }
     }
 }
+
+/// Handle the case where there's no config field in the schema.
+fn parse_env_no_config(env_config: &EnvConfig, source: &dyn EnvSource) -> LayerOutput {
+    use crate::config_value::{ConfigValue, Sourced};
+    use crate::driver::UnusedKey;
+
+    let prefix = &env_config.prefix;
+    let prefix_with_sep = format!("{}__", prefix);
+
+    let mut unused_keys = Vec::new();
+
+    for (name, _value) in source.vars() {
+        if name.starts_with(&prefix_with_sep) {
+            let rest = &name[prefix_with_sep.len()..];
+            if !rest.is_empty() {
+                let segments: Vec<&str> = rest.split("__").collect();
+                if !segments.iter().any(|s| s.is_empty()) {
+                    let path: Vec<String> = segments.iter().map(|s| s.to_lowercase()).collect();
+                    unused_keys.push(UnusedKey {
+                        key: path,
+                        provenance: Provenance::env(&name, ""),
+                    });
+                }
+            }
+        }
+    }
+
+    LayerOutput {
+        value: Some(ConfigValue::Object(Sourced::new(IndexMap::default()))),
+        unused_keys,
+        diagnostics: Vec::new(),
+    }
+}
+
+/// Parse an env var value, handling comma-separated lists.
+fn parse_env_value(value: &str) -> LeafValue {
+    if value.contains(',') {
+        let elements = parse_comma_separated(value);
+        if elements.len() > 1 {
+            return LeafValue::StringArray(elements);
+        } else if elements.len() == 1 {
+            return LeafValue::String(elements.into_iter().next().unwrap());
+        }
+    }
+    LeafValue::String(value.to_string())
+}
+
+/// Validate enum value if the target path points to an enum field.
+fn validate_enum_value_if_applicable(
+    builder: &mut ValueBuilder,
+    schema: &ConfigStructSchema,
+    path: &[String],
+    value: &str,
+    var_name: &str,
+) {
+    if let Some(value_schema) = schema.get_by_path(&path.to_vec()) {
+        // Unwrap Option wrapper if present
+        let inner_schema = match value_schema {
+            ConfigValueSchema::Option { value: inner, .. } => inner.as_ref(),
+            other => other,
+        };
+
+        // For enum fields, validate the value is a known variant
+        if let ConfigValueSchema::Enum(enum_schema) = inner_schema {
+            let variants = enum_schema.variants();
+            if !variants.contains_key(value) {
+                let valid_variants: Vec<&String> = variants.keys().collect();
+                builder.warn(format!(
+                    "{}: unknown variant '{}' for {}. Valid variants are: {}",
+                    var_name,
+                    value,
+                    path.join("."),
+                    valid_variants
+                        .iter()
+                        .map(|v| format!("'{}'", v))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+}
+
 
 /// Parse a comma-separated string, handling escaping.
 fn parse_comma_separated(input: &str) -> Vec<String> {
@@ -782,34 +444,6 @@ fn parse_comma_separated(input: &str) -> Vec<String> {
     result
 }
 
-/// Insert a value at a nested path in an IndexMap.
-fn insert_nested(
-    map: &mut IndexMap<String, ConfigValue, RandomState>,
-    path: &[String],
-    value: ConfigValue,
-) {
-    if path.is_empty() {
-        return;
-    }
-
-    if path.len() == 1 {
-        map.insert(path[0].clone(), value);
-        return;
-    }
-
-    let key = path[0].clone();
-    let entry = map.entry(key).or_insert_with(|| {
-        ConfigValue::Object(Sourced {
-            value: IndexMap::default(),
-            span: None,
-            provenance: None,
-        })
-    });
-
-    if let ConfigValue::Object(sourced) = entry {
-        insert_nested(&mut sourced.value, &path[1..], value);
-    }
-}
 
 #[cfg(test)]
 mod tests {

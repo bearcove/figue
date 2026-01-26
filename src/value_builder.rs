@@ -36,37 +36,58 @@ pub enum LeafValue {
     Integer(i64),
     Float(f64),
     Null,
+    /// Array of leaf values (for comma-separated env vars).
+    /// Each element shares the same provenance as the array.
+    StringArray(Vec<String>),
 }
 
 impl LeafValue {
     /// Convert to ConfigValue with the given span and provenance.
-    fn into_config_value(self, span: Option<Span>, provenance: Option<Provenance>) -> ConfigValue {
+    fn into_config_value(self, span: Option<Span>, provenance: Provenance) -> ConfigValue {
+        let prov = Some(provenance);
         match self {
             LeafValue::String(s) => ConfigValue::String(Sourced {
                 value: s,
                 span,
-                provenance,
+                provenance: prov,
             }),
             LeafValue::Bool(b) => ConfigValue::Bool(Sourced {
                 value: b,
                 span,
-                provenance,
+                provenance: prov,
             }),
             LeafValue::Integer(i) => ConfigValue::Integer(Sourced {
                 value: i,
                 span,
-                provenance,
+                provenance: prov,
             }),
             LeafValue::Float(f) => ConfigValue::Float(Sourced {
                 value: f,
                 span,
-                provenance,
+                provenance: prov,
             }),
             LeafValue::Null => ConfigValue::Null(Sourced {
                 value: (),
                 span,
-                provenance,
+                provenance: prov,
             }),
+            LeafValue::StringArray(strings) => {
+                let elements: Vec<ConfigValue> = strings
+                    .into_iter()
+                    .map(|s| {
+                        ConfigValue::String(Sourced {
+                            value: s,
+                            span,
+                            provenance: prov.clone(),
+                        })
+                    })
+                    .collect();
+                ConfigValue::Array(Sourced {
+                    value: elements,
+                    span,
+                    provenance: prov,
+                })
+            }
         }
     }
 }
@@ -79,16 +100,13 @@ pub struct ValueBuilder<'a> {
     /// The config struct schema to validate against.
     schema: &'a ConfigStructSchema,
 
-    /// Default provenance for all values (identifies the layer).
-    provenance: Provenance,
-
     /// The ConfigValue being built (always an object at the root).
     root: ObjectMap,
 
     /// Tracks which enum variant has been selected at each enum path.
     /// Key is the path to the enum field (e.g., ["storage"]).
     /// Value is (variant_name, provenance of first field set).
-    enum_variants: IndexMap<Path, (String, Option<Provenance>), RandomState>,
+    enum_variants: IndexMap<Path, (String, Provenance), RandomState>,
 
     /// Unused keys (paths that don't match the schema).
     unused_keys: Vec<UnusedKey>,
@@ -102,11 +120,9 @@ impl<'a> ValueBuilder<'a> {
     ///
     /// # Arguments
     /// * `schema` - The config struct schema to validate against
-    /// * `provenance` - Default provenance for all values (identifies the layer)
-    pub fn new(schema: &'a ConfigStructSchema, provenance: Provenance) -> Self {
+    pub fn new(schema: &'a ConfigStructSchema) -> Self {
         Self {
             schema,
-            provenance,
             root: IndexMap::default(),
             enum_variants: IndexMap::default(),
             unused_keys: Vec::new(),
@@ -121,8 +137,20 @@ impl<'a> ValueBuilder<'a> {
     ///
     /// For arrays, use numeric indices in the path: `["ports", "0"]`
     ///
+    /// # Arguments
+    /// * `path` - The path to set (e.g., `["storage", "s3", "bucket"]`)
+    /// * `value` - The leaf value to set
+    /// * `span` - Optional source span for error reporting
+    /// * `provenance` - Where this value came from (required for all values)
+    ///
     /// Returns `true` if the path was valid and the value was set.
-    pub fn set(&mut self, path: &Path, value: LeafValue, span: Option<Span>) -> bool {
+    pub fn set(
+        &mut self,
+        path: &Path,
+        value: LeafValue,
+        span: Option<Span>,
+        provenance: Provenance,
+    ) -> bool {
         if path.is_empty() {
             return false;
         }
@@ -133,7 +161,7 @@ impl<'a> ValueBuilder<'a> {
             None => {
                 self.unused_keys.push(UnusedKey {
                     key: path.clone(),
-                    provenance: self.provenance.clone(),
+                    provenance: provenance.clone(),
                 });
                 return false;
             }
@@ -141,13 +169,17 @@ impl<'a> ValueBuilder<'a> {
 
         // Check for enum variant conflicts
         for selection in &resolved.enum_selections {
-            if !self.check_enum_variant_conflict(&selection.enum_path, &selection.variant_name) {
+            if !self.check_enum_variant_conflict(
+                &selection.enum_path,
+                &selection.variant_name,
+                &provenance,
+            ) {
                 return false;
             }
         }
 
         // Convert leaf value to ConfigValue with provenance
-        let config_value = value.into_config_value(span, Some(self.provenance.clone()));
+        let config_value = value.into_config_value(span, provenance);
 
         // Insert at the resolved path
         self.insert_at_path(&resolved.insertion_path, config_value);
@@ -392,16 +424,18 @@ impl<'a> ValueBuilder<'a> {
     }
 
     /// Check and record enum variant selection. Returns false if there's a conflict.
-    fn check_enum_variant_conflict(&mut self, enum_path: &[String], variant_name: &str) -> bool {
+    fn check_enum_variant_conflict(
+        &mut self,
+        enum_path: &[String],
+        variant_name: &str,
+        provenance: &Provenance,
+    ) -> bool {
         let key = enum_path.to_vec();
 
         if let Some((existing_variant, existing_prov)) = self.enum_variants.get(&key) {
             if existing_variant != variant_name {
-                let existing_source = existing_prov
-                    .as_ref()
-                    .map(|p| p.source_description())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let new_source = self.provenance.source_description();
+                let existing_source = existing_prov.source_description();
+                let new_source = provenance.source_description();
 
                 self.error(format!(
                     "Conflicting enum variants for `{}`: variant '{}' (from {}) conflicts with '{}' (from {})",
@@ -415,7 +449,7 @@ impl<'a> ValueBuilder<'a> {
             }
         } else {
             self.enum_variants
-                .insert(key, (variant_name.to_string(), Some(self.provenance.clone())));
+                .insert(key, (variant_name.to_string(), provenance.clone()));
         }
 
         true
@@ -575,9 +609,14 @@ mod tests {
     fn test_simple_set() {
         let schema = Schema::from_shape(ArgsWithSimpleConfig::SHAPE).unwrap();
         let config_schema = schema.config().unwrap();
-        let mut builder = ValueBuilder::new(config_schema, Provenance::Default);
+        let mut builder = ValueBuilder::new(config_schema);
 
-        let success = builder.set(&path(&["port"]), LeafValue::String("8080".into()), None);
+        let success = builder.set(
+            &path(&["port"]),
+            LeafValue::String("8080".into()),
+            None,
+            Provenance::Default,
+        );
         assert!(success);
 
         let output = builder.into_output(Some("config"));
@@ -589,9 +628,14 @@ mod tests {
     fn test_invalid_path() {
         let schema = Schema::from_shape(ArgsWithSimpleConfig::SHAPE).unwrap();
         let config_schema = schema.config().unwrap();
-        let mut builder = ValueBuilder::new(config_schema, Provenance::Default);
+        let mut builder = ValueBuilder::new(config_schema);
 
-        let success = builder.set(&path(&["invalid"]), LeafValue::String("value".into()), None);
+        let success = builder.set(
+            &path(&["invalid"]),
+            LeafValue::String("value".into()),
+            None,
+            Provenance::Default,
+        );
         assert!(!success);
         assert!(!builder.unused_keys.is_empty());
     }
@@ -600,21 +644,24 @@ mod tests {
     fn test_enum_variant_path() {
         let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
         let config_schema = schema.config().unwrap();
-        let mut builder =
-            ValueBuilder::new(config_schema, Provenance::env("TEST__STORAGE__S3__BUCKET", "x"));
+        let mut builder = ValueBuilder::new(config_schema);
 
+        let prov_bucket = Provenance::env("TEST__STORAGE__S3__BUCKET", "my-bucket");
         let success = builder.set(
             &path(&["storage", "s3", "bucket"]),
             LeafValue::String("my-bucket".into()),
             None,
+            prov_bucket,
         );
         assert!(success);
 
         // Same variant, different field
+        let prov_region = Provenance::env("TEST__STORAGE__S3__REGION", "us-east-1");
         let success = builder.set(
             &path(&["storage", "s3", "region"]),
             LeafValue::String("us-east-1".into()),
             None,
+            prov_region,
         );
         assert!(success);
 
@@ -626,21 +673,24 @@ mod tests {
     fn test_enum_variant_conflict() {
         let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
         let config_schema = schema.config().unwrap();
-        let mut builder =
-            ValueBuilder::new(config_schema, Provenance::env("TEST__STORAGE__S3__BUCKET", "x"));
+        let mut builder = ValueBuilder::new(config_schema);
 
         // Set S3 variant
+        let prov_s3 = Provenance::env("TEST__STORAGE__S3__BUCKET", "my-bucket");
         builder.set(
             &path(&["storage", "s3", "bucket"]),
             LeafValue::String("my-bucket".into()),
             None,
+            prov_s3,
         );
 
         // Try GCP variant - should conflict
+        let prov_gcp = Provenance::env("TEST__STORAGE__GCP__PROJECT", "my-project");
         let success = builder.set(
             &path(&["storage", "gcp", "project"]),
             LeafValue::String("my-project".into()),
             None,
+            prov_gcp,
         );
         assert!(!success);
         assert!(!builder.diagnostics.is_empty());
@@ -651,11 +701,16 @@ mod tests {
     fn test_has_value_at() {
         let schema = Schema::from_shape(ArgsWithSimpleConfig::SHAPE).unwrap();
         let config_schema = schema.config().unwrap();
-        let mut builder = ValueBuilder::new(config_schema, Provenance::Default);
+        let mut builder = ValueBuilder::new(config_schema);
 
         assert!(!builder.has_value_at(&path(&["port"])));
 
-        builder.set(&path(&["port"]), LeafValue::String("8080".into()), None);
+        builder.set(
+            &path(&["port"]),
+            LeafValue::String("8080".into()),
+            None,
+            Provenance::Default,
+        );
 
         assert!(builder.has_value_at(&path(&["port"])));
         assert!(!builder.has_value_at(&path(&["host"])));
