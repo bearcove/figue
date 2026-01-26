@@ -378,6 +378,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "corosensei"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2b4c7e3e97730e6b0b8c5ff5ca82c663d1a645e4f630f4fa4c24e80626787e"
+dependencies = [
+ "autocfg",
+ "cfg-if",
+ "libc",
+ "scopeguard",
+ "windows-sys",
+]
+
+[[package]]
 name = "countme"
 version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -439,7 +452,7 @@ dependencies = [
 [[package]]
 name = "facet"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "autocfg",
  "facet-core",
@@ -449,7 +462,7 @@ dependencies = [
 [[package]]
 name = "facet-core"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "autocfg",
  "bytes",
@@ -480,7 +493,7 @@ dependencies = [
 [[package]]
 name = "facet-dessert"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -489,7 +502,7 @@ dependencies = [
 [[package]]
 name = "facet-error"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet",
 ]
@@ -497,8 +510,9 @@ dependencies = [
 [[package]]
 name = "facet-format"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
+ "corosensei",
  "facet-core",
  "facet-dessert",
  "facet-path",
@@ -510,7 +524,7 @@ dependencies = [
 [[package]]
 name = "facet-json"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet",
  "facet-core",
@@ -523,7 +537,7 @@ dependencies = [
 [[package]]
 name = "facet-macro-parse"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-macro-types",
  "proc-macro2",
@@ -533,7 +547,7 @@ dependencies = [
 [[package]]
 name = "facet-macro-types"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -543,7 +557,7 @@ dependencies = [
 [[package]]
 name = "facet-macros"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-macros-impl",
 ]
@@ -551,7 +565,7 @@ dependencies = [
 [[package]]
 name = "facet-macros-impl"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-macro-parse",
  "facet-macro-types",
@@ -564,7 +578,7 @@ dependencies = [
 [[package]]
 name = "facet-path"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-core",
 ]
@@ -572,7 +586,7 @@ dependencies = [
 [[package]]
 name = "facet-pretty"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -582,7 +596,7 @@ dependencies = [
 [[package]]
 name = "facet-reflect"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-core",
  "tracing",
@@ -591,7 +605,7 @@ dependencies = [
 [[package]]
 name = "facet-showcase"
 version = "0.43.0"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "arborium",
  "facet",
@@ -602,7 +616,7 @@ dependencies = [
 [[package]]
 name = "facet-solver"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -628,7 +642,7 @@ dependencies = [
 [[package]]
 name = "facet-testhelpers"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "color-backtrace",
  "facet-testhelpers-macros",
@@ -640,7 +654,7 @@ dependencies = [
 [[package]]
 name = "facet-testhelpers-macros"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#a03551d849797da8457867a1a1cd6cc4947cad4b"
+source = "git+https://github.com/facet-rs/facet?branch=main#6d4f98591b431180182ac736d58f645a8c48f6af"
 dependencies = [
  "quote",
  "unsynn",
