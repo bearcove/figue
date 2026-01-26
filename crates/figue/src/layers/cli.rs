@@ -1349,39 +1349,28 @@ mod tests {
 
     #[test]
     fn test_config_override_with_flattened_struct() {
-        // CLI config overrides use the full path to the target location.
-        // Even though the schema has `log_level` as a flattened field,
-        // the CLI override uses --config.common.log_level to specify
-        // the actual nested path where the value will be stored.
+        // Flattened fields are accessed directly without the wrapper field name.
+        // Since `common` is flattened, `log_level` appears at the top level of the config.
         assert_parses_to::<ArgsWithFlattenedConfigCli>(
-            &["--config.common.log_level", "debug"],
+            &["--config.log_level", "debug"],
             cv::object([(
                 "config",
-                cv::object([(
-                    "common",
-                    cv::object([(
-                        "log_level",
-                        cv::string("debug", "--config.common.log_level"),
-                    )]),
-                )]),
+                cv::object([("log_level", cv::string("debug", "--config.log_level"))]),
             )]),
         );
     }
 
     #[test]
     fn test_config_override_flattened_and_regular_fields() {
-        // Mix of regular (port) and flattened (common.debug) fields
-        // Note: CLI config overrides parse values as strings; type coercion happens at deserialization
+        // Mix of regular (port) and flattened (debug) fields.
+        // Since `common` is flattened, its fields appear directly in the config.
         assert_parses_to::<ArgsWithFlattenedConfigCli>(
-            &["--config.port", "8080", "--config.common.debug", "true"],
+            &["--config.port", "8080", "--config.debug", "true"],
             cv::object([(
                 "config",
                 cv::object([
                     ("port", cv::string("8080", "--config.port")),
-                    (
-                        "common",
-                        cv::object([("debug", cv::string("true", "--config.common.debug"))]),
-                    ),
+                    ("debug", cv::string("true", "--config.debug")),
                 ]),
             )]),
         );
