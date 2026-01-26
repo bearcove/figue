@@ -23,6 +23,8 @@ pub struct MissingFieldInfo {
     pub cli_flag: Option<String>,
     /// Environment variable to set this field (e.g., "APP__SERVER__HOST")
     pub env_var: Option<String>,
+    /// Environment variable aliases (e.g., ["DATABASE_URL", "DB_URL"])
+    pub env_aliases: Vec<String>,
 }
 
 /// Collect missing required fields by walking the schema and checking against the ConfigValue.
@@ -65,6 +67,7 @@ pub fn collect_missing_fields(
                     doc_comment: None,
                     cli_flag: None,
                     env_var: None,
+                    env_aliases: Vec::new(),
                 });
             }
         } else {
@@ -104,6 +107,7 @@ fn collect_missing_in_arg_level(
                 doc_comment: arg_schema.docs().summary().map(|s| s.to_string()),
                 cli_flag,
                 env_var: None, // CLI args don't have env vars
+                env_aliases: Vec::new(),
             });
         }
     }
@@ -125,6 +129,7 @@ fn collect_missing_in_arg_level(
             doc_comment: None,
             cli_flag: Some(format!("<{}>", subcommand_field.to_kebab_case())),
             env_var: None,
+            env_aliases: Vec::new(),
         });
     }
 }
@@ -255,6 +260,7 @@ fn collect_missing_in_config_value(
                                     doc_comment: None,
                                     cli_flag: None,
                                     env_var: None,
+                                    env_aliases: field_schema.env_aliases().to_vec(),
                                 });
                             }
                         }
@@ -335,6 +341,7 @@ fn check_missing_field(
             doc_comment: None, // Schema doesn't currently expose docs on ConfigFieldSchema
             cli_flag,
             env_var,
+            env_aliases: field_schema.env_aliases().to_vec(),
         });
     }
 }
@@ -388,6 +395,14 @@ pub fn format_missing_fields_summary(missing: &[MissingFieldInfo]) -> String {
         }
         if let Some(env) = &field.env_var {
             hints.push(format!("${}", env).yellow().to_string());
+        }
+        // Show env aliases
+        for alias in &field.env_aliases {
+            hints.push(
+                format!("${} {}", alias, "(alias)".dimmed())
+                    .yellow()
+                    .to_string(),
+            );
         }
         if !hints.is_empty() {
             write!(output, " ({})", hints.join(" or ")).unwrap();

@@ -212,7 +212,6 @@ pub fn parse_env(schema: &Schema, env_config: &EnvConfig, source: &dyn EnvSource
 
 /// Context for parsing environment variables.
 struct EnvParseContext<'a> {
-    schema: &'a Schema,
     env_config: &'a EnvConfig,
     /// The config field name from schema (e.g., "config" or "settings")
     config_field_name: Option<&'a str>,
@@ -235,7 +234,6 @@ impl<'a> EnvParseContext<'a> {
         };
 
         Self {
-            schema,
             env_config,
             config_field_name,
             config_schema,

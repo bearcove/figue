@@ -272,7 +272,6 @@ fn get_provenance(value: &ConfigValue) -> Option<&Provenance> {
 
 /// Context for parsing config files.
 struct FileParseContext<'a> {
-    schema: &'a Schema,
     config: &'a FileConfig,
     /// The config struct schema, if present
     config_schema: Option<&'a ConfigStructSchema>,
@@ -297,7 +296,6 @@ impl<'a> FileParseContext<'a> {
         };
 
         Self {
-            schema,
             config,
             config_schema,
             config_field_name,

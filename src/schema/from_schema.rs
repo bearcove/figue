@@ -114,7 +114,8 @@ fn extract_env_prefix(field: &Field) -> Option<String> {
 }
 
 /// Extract all env_alias values from a field's `#[facet(args::env_alias = "...")]` attributes.
-/// Multiple aliases can be specified by using the attribute multiple times.
+/// Multiple aliases can be specified by using the attribute multiple times:
+/// `#[facet(args::env_alias = "A", args::env_alias = "B")]`
 fn extract_env_aliases(field: &Field) -> Vec<String> {
     let mut aliases = Vec::new();
     // Iterate through all attributes to find all env_alias entries
@@ -397,12 +398,43 @@ fn config_struct_schema_from_shape_with_prefix(
         );
     }
 
+    // Check for conflicting env aliases across all fields
+    check_env_alias_conflicts(&fields_map, ctx)?;
+
     Ok(ConfigStructSchema {
         field_name,
         env_prefix,
         shape,
         fields: fields_map,
     })
+}
+
+/// Check that no two fields share the same env alias.
+fn check_env_alias_conflicts(
+    fields: &IndexMap<String, ConfigFieldSchema, RandomState>,
+    ctx: &SchemaErrorContext,
+) -> Result<(), SchemaError> {
+    use std::collections::HashMap;
+
+    // Map from alias to the field name that uses it
+    let mut alias_to_field: HashMap<&str, &str> = HashMap::new();
+
+    for (field_name, field_schema) in fields.iter() {
+        for alias in field_schema.env_aliases() {
+            if let Some(existing_field) = alias_to_field.get(alias.as_str()) {
+                return Err(SchemaError::new(
+                    ctx.clone(),
+                    format!(
+                        "env alias `{}` is used by both `{}` and `{}`",
+                        alias, existing_field, field_name
+                    ),
+                ));
+            }
+            alias_to_field.insert(alias.as_str(), field_name.as_str());
+        }
+    }
+
+    Ok(())
 }
 
 fn short_from_field(field: &Field) -> Option<char> {

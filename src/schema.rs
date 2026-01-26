@@ -170,6 +170,7 @@ pub enum LeafKind {
     /// Primitive scalar value (bool/string/number-like).
     Scalar(ScalarType),
     /// Enum value (variants represented as CLI strings).
+    #[allow(dead_code)]
     Enum { variants: Vec<String> },
 }
 

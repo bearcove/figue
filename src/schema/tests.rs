@@ -440,3 +440,33 @@ fn test_struct_field_without_flatten_is_error() {
         err
     );
 }
+
+// ============================================================================
+// Env alias conflict detection
+// ============================================================================
+
+#[derive(Facet)]
+struct ConfigWithConflictingAliases {
+    #[facet(args::env_alias = "DATABASE_URL")]
+    db_url: String,
+    #[facet(args::env_alias = "DATABASE_URL")]
+    connection_string: String,
+}
+
+#[derive(Facet)]
+struct ArgsWithConflictingAliases {
+    #[facet(args::config)]
+    config: ConfigWithConflictingAliases,
+}
+
+#[test]
+fn test_env_alias_conflict_detected() {
+    let result = Schema::from_shape(ArgsWithConflictingAliases::SHAPE);
+    assert!(result.is_err(), "should detect duplicate env alias");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("DATABASE_URL") && err.contains("db_url") && err.contains("connection_string"),
+        "error should mention the alias and both fields: {}",
+        err
+    );
+}
