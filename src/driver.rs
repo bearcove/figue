@@ -31,7 +31,7 @@ use crate::dump::dump_config_with_schema;
 use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
-use crate::missing::collect_missing_fields;
+use crate::missing::{collect_missing_fields, format_missing_fields_summary};
 use crate::path::Path;
 use crate::provenance::{FileResolution, Override, Provenance};
 use crate::span::Span;
@@ -306,9 +306,13 @@ impl<T: Facet<'static>> Driver<T> {
             );
             let dump =
                 String::from_utf8(dump_buf).unwrap_or_else(|_| "error rendering dump".into());
+
+            // Format the summary of missing fields
+            let summary = format_missing_fields_summary(&missing_fields);
+
             let message = format!(
-                "Missing required fields:\n\n{}\nRun with --help for usage information.",
-                dump
+                "Missing required fields:\n\n{}\nMissing:\n{}\nRun with --help for usage information.",
+                dump, summary
             );
 
             return Err(DriverError::Failed {

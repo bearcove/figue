@@ -10,4 +10,7 @@ Sources:
 
 required_field  ❌ MISSING <String> 
 
+Missing:
+  required_field <String> (--required-field)
+
 Run with --help for usage information.

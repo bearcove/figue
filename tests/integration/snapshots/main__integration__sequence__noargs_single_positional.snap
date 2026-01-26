@@ -10,4 +10,7 @@ Sources:
 
 strings  ❌ MISSING <String> 
 
+Missing:
+  strings <String> (<strings>)
+
 Run with --help for usage information.

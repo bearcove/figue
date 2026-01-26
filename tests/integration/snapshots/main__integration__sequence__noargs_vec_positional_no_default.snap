@@ -10,4 +10,7 @@ Sources:
 
 strings  ❌ MISSING <Vec<String>> 
 
+Missing:
+  strings <Vec<String>> (<strings>)
+
 Run with --help for usage information.

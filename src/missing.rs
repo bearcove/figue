@@ -2,8 +2,11 @@
 
 use crate::config_value::ConfigValue;
 use crate::schema::{
-    ArgLevelSchema, ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, Schema, ValueSchema,
+    ArgKind, ArgLevelSchema, ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, Schema,
+    ValueSchema,
 };
+use heck::ToKebabCase;
+use heck::ToShoutySnakeCase;
 
 /// Information about a missing required field.
 #[derive(Debug, Clone)]
@@ -16,6 +19,10 @@ pub struct MissingFieldInfo {
     pub type_name: String,
     /// Documentation comment if available
     pub doc_comment: Option<String>,
+    /// CLI flag to set this field (e.g., "--config.server-host" or "--settings.server-host")
+    pub cli_flag: Option<String>,
+    /// Environment variable to set this field (e.g., "APP__SERVER__HOST")
+    pub env_var: Option<String>,
 }
 
 /// Collect missing required fields by walking the schema and checking against the ConfigValue.
@@ -37,10 +44,18 @@ pub fn collect_missing_fields(
 
     // Check config section if present
     if let Some(config_schema) = schema.config() {
+        let env_prefix = config_schema.env_prefix();
+
         // The config value is nested under the config field name
         if let Some(field_name) = config_schema.field_name() {
             if let Some(config_value) = obj_map.get(field_name) {
-                collect_missing_in_config_struct(config_value, config_schema, "", missing);
+                collect_missing_in_config_struct(
+                    config_value,
+                    config_schema,
+                    "",
+                    env_prefix,
+                    missing,
+                );
             } else {
                 // The entire config struct is missing - report it
                 missing.push(MissingFieldInfo {
@@ -48,11 +63,13 @@ pub fn collect_missing_fields(
                     field_path: field_name.to_string(),
                     type_name: "Struct".to_string(),
                     doc_comment: None,
+                    cli_flag: None,
+                    env_var: None,
                 });
             }
         } else {
             // Config has no field name (shouldn't happen normally), check at root level
-            collect_missing_in_config_struct(value, config_schema, "", missing);
+            collect_missing_in_config_struct(value, config_schema, "", env_prefix, missing);
         }
     }
 }
@@ -73,11 +90,20 @@ fn collect_missing_in_arg_level(
 
         if obj_map.get(name.as_str()).is_none() && arg_schema.required() {
             let type_name = get_value_type_name(arg_schema.value());
+
+            // CLI args use kebab-case and are either positional or flags
+            let cli_flag = match arg_schema.kind() {
+                ArgKind::Positional => Some(format!("<{}>", name.to_kebab_case())),
+                ArgKind::Named { .. } => Some(format!("--{}", name.to_kebab_case())),
+            };
+
             missing.push(MissingFieldInfo {
                 field_name: name.to_string(),
                 field_path,
                 type_name,
                 doc_comment: arg_schema.docs().summary().map(|s| s.to_string()),
+                cli_flag,
+                env_var: None, // CLI args don't have env vars
             });
         }
     }
@@ -97,6 +123,8 @@ fn collect_missing_in_arg_level(
             field_path,
             type_name: "Subcommand".to_string(),
             doc_comment: None,
+            cli_flag: Some(format!("<{}>", subcommand_field.to_kebab_case())),
+            env_var: None,
         });
     }
 }
@@ -111,16 +139,32 @@ fn get_value_type_name(schema: &ValueSchema) -> String {
     }
 }
 
+/// Context for collecting missing config fields.
+struct ConfigContext<'a> {
+    /// The config field name (e.g., "config" or "settings")
+    config_field_name: &'a str,
+    /// Environment variable prefix if set
+    env_prefix: Option<&'a str>,
+}
+
 /// Walk a config struct schema and its corresponding ConfigValue.
 fn collect_missing_in_config_struct(
     value: &ConfigValue,
     struct_schema: &ConfigStructSchema,
     path_prefix: &str,
+    env_prefix: Option<&str>,
     missing: &mut Vec<MissingFieldInfo>,
 ) {
     let obj_map = match value {
         ConfigValue::Object(sourced) => &sourced.value,
         _ => return, // Not an object, can't check struct fields
+    };
+
+    // Get the config field name from the struct schema
+    let config_field_name = struct_schema.field_name().unwrap_or("config");
+    let ctx = ConfigContext {
+        config_field_name,
+        env_prefix,
     };
 
     for (field_name, field_schema) in struct_schema.fields() {
@@ -132,10 +176,10 @@ fn collect_missing_in_config_struct(
 
         if let Some(field_value) = obj_map.get(field_name.as_str()) {
             // Field exists - recurse into nested structs/vecs
-            collect_missing_in_config_field(field_value, field_schema, &field_path, missing);
+            collect_missing_in_config_field(field_value, field_schema, &field_path, &ctx, missing);
         } else {
             // Field is missing - check if it's required
-            check_missing_field(field_name, &field_path, field_schema, missing);
+            check_missing_field(field_name, &field_path, field_schema, &ctx, missing);
         }
     }
 }
@@ -145,9 +189,10 @@ fn collect_missing_in_config_field(
     value: &ConfigValue,
     field_schema: &ConfigFieldSchema,
     path_prefix: &str,
+    ctx: &ConfigContext,
     missing: &mut Vec<MissingFieldInfo>,
 ) {
-    collect_missing_in_config_value(value, field_schema.value(), path_prefix, missing);
+    collect_missing_in_config_value(value, field_schema.value(), path_prefix, ctx, missing);
 }
 
 /// Walk a config value schema and its corresponding ConfigValue.
@@ -155,11 +200,13 @@ fn collect_missing_in_config_value(
     value: &ConfigValue,
     value_schema: &ConfigValueSchema,
     path_prefix: &str,
+    ctx: &ConfigContext,
     missing: &mut Vec<MissingFieldInfo>,
 ) {
     match value_schema {
         ConfigValueSchema::Struct(struct_schema) => {
-            collect_missing_in_config_struct(value, struct_schema, path_prefix, missing);
+            // For nested structs, we don't have a new env_prefix, pass the existing one
+            collect_missing_in_config_struct_inner(value, struct_schema, path_prefix, ctx, missing);
         }
         ConfigValueSchema::Vec(vec_schema) => {
             // Recurse into array elements
@@ -170,6 +217,7 @@ fn collect_missing_in_config_value(
                         item,
                         vec_schema.element(),
                         &item_path,
+                        ctx,
                         missing,
                     );
                 }
@@ -177,10 +225,38 @@ fn collect_missing_in_config_value(
         }
         ConfigValueSchema::Option { value: inner, .. } => {
             // Option fields are never required, but recurse to check nested structs
-            collect_missing_in_config_value(value, inner, path_prefix, missing);
+            collect_missing_in_config_value(value, inner, path_prefix, ctx, missing);
         }
         ConfigValueSchema::Leaf(_) => {
             // Leaf values have no nested fields to check
+        }
+    }
+}
+
+/// Inner function for nested structs (doesn't reset context).
+fn collect_missing_in_config_struct_inner(
+    value: &ConfigValue,
+    struct_schema: &ConfigStructSchema,
+    path_prefix: &str,
+    ctx: &ConfigContext,
+    missing: &mut Vec<MissingFieldInfo>,
+) {
+    let obj_map = match value {
+        ConfigValue::Object(sourced) => &sourced.value,
+        _ => return,
+    };
+
+    for (field_name, field_schema) in struct_schema.fields() {
+        let field_path = if path_prefix.is_empty() {
+            field_name.to_string()
+        } else {
+            format!("{}.{}", path_prefix, field_name)
+        };
+
+        if let Some(field_value) = obj_map.get(field_name.as_str()) {
+            collect_missing_in_config_field(field_value, field_schema, &field_path, ctx, missing);
+        } else {
+            check_missing_field(field_name, &field_path, field_schema, ctx, missing);
         }
     }
 }
@@ -190,6 +266,7 @@ fn check_missing_field(
     field_name: &str,
     field_path: &str,
     field_schema: &ConfigFieldSchema,
+    ctx: &ConfigContext,
     missing: &mut Vec<MissingFieldInfo>,
 ) {
     // A field is required if it's NOT wrapped in Option
@@ -197,11 +274,32 @@ fn check_missing_field(
 
     if !is_optional {
         let type_name = get_config_type_name(field_schema.value());
+
+        // CLI flag: --config.field-path (kebab-case the path segments)
+        let cli_path = field_path
+            .split('.')
+            .map(|s| s.to_kebab_case())
+            .collect::<Vec<_>>()
+            .join(".");
+        let cli_flag = Some(format!("--{}.{}", ctx.config_field_name, cli_path));
+
+        // Env var: PREFIX__FIELD__PATH (SCREAMING_SNAKE_CASE)
+        let env_var = ctx.env_prefix.map(|prefix| {
+            let env_path = field_path
+                .split('.')
+                .map(|s| s.to_shouty_snake_case())
+                .collect::<Vec<_>>()
+                .join("__");
+            format!("{}__{}", prefix, env_path)
+        });
+
         missing.push(MissingFieldInfo {
             field_name: field_name.to_string(),
             field_path: field_path.to_string(),
             type_name,
             doc_comment: None, // Schema doesn't currently expose docs on ConfigFieldSchema
+            cli_flag,
+            env_var,
         });
     }
 }
@@ -216,6 +314,54 @@ fn get_config_type_name(schema: &ConfigValueSchema) -> String {
         }
         ConfigValueSchema::Leaf(leaf) => leaf.shape.to_string(),
     }
+}
+
+/// Format a summary of missing fields for display after the config dump.
+///
+/// This produces a focused list of just the missing fields with their paths,
+/// types, and documentation (if available), so users can quickly see what
+/// needs to be provided without scrolling through the entire config dump.
+pub fn format_missing_fields_summary(missing: &[MissingFieldInfo]) -> String {
+    use owo_colors::OwoColorize;
+    use std::fmt::Write;
+
+    if missing.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+
+    for field in missing {
+        // Field path and type
+        write!(
+            output,
+            "  {} <{}>",
+            field.field_path.bold(),
+            field.type_name.cyan()
+        )
+        .unwrap();
+
+        // Show how to set the field
+        let mut hints = Vec::new();
+        if let Some(cli) = &field.cli_flag {
+            hints.push(cli.green().to_string());
+        }
+        if let Some(env) = &field.env_var {
+            hints.push(format!("${}", env).yellow().to_string());
+        }
+        if !hints.is_empty() {
+            write!(output, " ({})", hints.join(" or ")).unwrap();
+        }
+
+        // Add doc comment on a new line if available
+        if let Some(doc) = &field.doc_comment {
+            write!(output, "\n    {}", doc.dimmed()).unwrap();
+        }
+
+        output.push('\n');
+    }
+
+    output
 }
 
 #[cfg(test)]
