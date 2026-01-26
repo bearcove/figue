@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/bearcove/figue"
 description = "Attribute macros for figue CLI argument parsing"
 documentation = "https://docs.rs/figue-attrs"
+readme = "README.md"
 keywords = ["cli", "args", "parser", "facet", "command-line"]
 categories = ["command-line-interface"]
 homepage = "https://github.com/bearcove/figue"
