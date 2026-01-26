@@ -150,6 +150,7 @@ impl<T: Facet<'static>> Driver<T> {
         // 1d. CLI layer
         if let Some(ref cli_config) = self.config.cli_config {
             layers.cli = parse_cli(&self.config.schema, cli_config);
+            tracing::debug!(cli_value = ?layers.cli.value, "driver: parsed CLI layer");
             all_diagnostics.extend(layers.cli.diagnostics.iter().cloned());
         }
 
@@ -243,11 +244,13 @@ impl<T: Facet<'static>> Driver<T> {
         .collect();
 
         let merged = merge_layers(values_to_merge);
+        tracing::debug!(merged_value = ?merged.value, "driver: merged layers");
         let overrides = merged.overrides;
 
         // Phase 3: Fill defaults and check for missing required fields
         // This must happen BEFORE deserialization so we can show all missing fields at once
         let value_with_defaults = fill_defaults_from_shape(&merged.value, T::SHAPE);
+        tracing::debug!(value_with_defaults = ?value_with_defaults, "driver: after fill_defaults_from_shape");
 
         // Check for missing required fields by walking the schema
         let mut missing_fields = Vec::new();
@@ -905,5 +908,268 @@ mod tests {
         assert!(version_err.is_success());
         assert!(completions_err.is_success());
         assert!(!failed_err.is_success());
+    }
+
+    // ========================================================================
+    // Tests: Builder API with subcommands (regression test for issue #3)
+    // ========================================================================
+
+    /// Subcommand enum for testing
+    #[derive(Facet, Debug, PartialEq)]
+    #[repr(u8)]
+    enum TestCommand {
+        /// Build the project
+        Build {
+            /// Build in release mode
+            #[facet(figue::named, figue::short = 'r')]
+            release: bool,
+        },
+        /// Run the project
+        Run {
+            /// Arguments to pass
+            #[facet(figue::positional)]
+            args: Vec<String>,
+        },
+    }
+
+    /// Args struct with subcommand only (minimal reproduction)
+    #[derive(Facet, Debug)]
+    struct ArgsWithSubcommandOnly {
+        #[facet(figue::subcommand)]
+        command: TestCommand,
+    }
+
+    /// Args struct with subcommand AND FigueBuiltins (issue report pattern)
+    #[derive(Facet, Debug)]
+    struct ArgsWithSubcommandAndBuiltins {
+        #[facet(figue::subcommand)]
+        command: TestCommand,
+
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    // Test the minimal case - subcommand only, no builtins
+    #[test]
+    fn test_builder_api_with_subcommand_minimal() {
+        let config = builder::<ArgsWithSubcommandOnly>()
+            .expect("failed to build args schema")
+            .cli(|cli| cli.args(["build", "--release"]))
+            .build();
+
+        let result = Driver::new(config).run();
+
+        match result {
+            Ok(output) => match &output.value.command {
+                TestCommand::Build { release } => {
+                    assert!(*release, "release flag should be true");
+                }
+                TestCommand::Run { .. } => {
+                    panic!("expected Build subcommand, got Run");
+                }
+            },
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    // Test with FigueBuiltins (the pattern from issue report)
+    #[test]
+    fn test_builder_api_with_subcommand_and_builtins() {
+        let config = builder::<ArgsWithSubcommandAndBuiltins>()
+            .expect("failed to build args schema")
+            .cli(|cli| cli.args(["build", "--release"]))
+            .help(|h| h.program_name("test-app").version("1.0.0"))
+            .build();
+
+        let result = Driver::new(config).run();
+
+        match result {
+            Ok(output) => match &output.value.command {
+                TestCommand::Build { release } => {
+                    assert!(*release, "release flag should be true");
+                }
+                TestCommand::Run { .. } => {
+                    panic!("expected Build subcommand, got Run");
+                }
+            },
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_api_with_subcommand_no_args() {
+        let config = builder::<ArgsWithSubcommandOnly>()
+            .expect("failed to build args schema")
+            .cli(|cli| cli.args(["build"]))
+            .build();
+
+        let result = Driver::new(config).run();
+
+        match result {
+            Ok(output) => match &output.value.command {
+                TestCommand::Build { release } => {
+                    assert!(!*release, "release flag should be false by default");
+                }
+                TestCommand::Run { .. } => {
+                    panic!("expected Build subcommand, got Run");
+                }
+            },
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_api_with_run_subcommand() {
+        let config = builder::<ArgsWithSubcommandOnly>()
+            .expect("failed to build args schema")
+            .cli(|cli| cli.args(["run", "arg1", "arg2"]))
+            .build();
+
+        let result = Driver::new(config).run();
+
+        match result {
+            Ok(output) => match &output.value.command {
+                TestCommand::Run { args } => {
+                    assert_eq!(args, &["arg1".to_string(), "arg2".to_string()]);
+                }
+                TestCommand::Build { .. } => {
+                    panic!("expected Run subcommand, got Build");
+                }
+            },
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_from_slice_with_subcommand() {
+        // Test that from_slice (which uses builder internally) works with subcommands
+        let result: Result<ArgsWithSubcommandOnly, _> = crate::from_slice(&["build", "--release"]);
+
+        match result {
+            Ok(args) => match &args.command {
+                TestCommand::Build { release } => {
+                    assert!(*release, "release flag should be true");
+                }
+                TestCommand::Run { .. } => {
+                    panic!("expected Build subcommand, got Run");
+                }
+            },
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_from_slice_with_subcommand_and_builtins() {
+        // Test that from_slice works with subcommands AND FigueBuiltins
+        let result: Result<ArgsWithSubcommandAndBuiltins, _> =
+            crate::from_slice(&["build", "--release"]);
+
+        match result {
+            Ok(args) => match &args.command {
+                TestCommand::Build { release } => {
+                    assert!(*release, "release flag should be true");
+                }
+                TestCommand::Run { .. } => {
+                    panic!("expected Build subcommand, got Run");
+                }
+            },
+            Err(e) => panic!("expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_debug_subcommand_with_builtins_parsing() {
+        use crate::config_value_parser::fill_defaults_from_shape;
+        use crate::dump::collect_missing_fields;
+        use crate::layers::cli::CliConfigBuilder;
+        use crate::layers::cli::parse_cli;
+        use crate::schema::Schema;
+
+        // Build schema for the type with subcommand + builtins
+        let schema =
+            Schema::from_shape(ArgsWithSubcommandAndBuiltins::SHAPE).expect("schema should build");
+
+        // Check what the schema says about subcommand field
+        let args_level = schema.args();
+        eprintln!(
+            "Schema subcommand_field_name: {:?}",
+            args_level.subcommand_field_name()
+        );
+        eprintln!(
+            "Schema args: {:?}",
+            args_level.args().keys().collect::<Vec<_>>()
+        );
+        eprintln!(
+            "Schema subcommands: {:?}",
+            args_level.subcommands().keys().collect::<Vec<_>>()
+        );
+
+        // Parse CLI args
+        let cli_config = CliConfigBuilder::new().args(["build", "--release"]).build();
+        let output = parse_cli(&schema, &cli_config);
+
+        eprintln!("CLI output value: {:#?}", output.value);
+        eprintln!("CLI output diagnostics: {:?}", output.diagnostics);
+
+        // The value should have a "command" key with the enum
+        if let Some(crate::config_value::ConfigValue::Object(obj)) = output.value.as_ref() {
+            eprintln!("Top-level keys: {:?}", obj.value.keys().collect::<Vec<_>>());
+            for (k, v) in &obj.value {
+                eprintln!("  {} = {:?}", k, v);
+            }
+        }
+
+        assert!(output.diagnostics.is_empty(), "should have no diagnostics");
+
+        // Now test fill_defaults_from_shape
+        let cli_value = output.value.unwrap();
+        eprintln!("\n--- fill_defaults_from_shape ---");
+        let with_defaults =
+            fill_defaults_from_shape(&cli_value, ArgsWithSubcommandAndBuiltins::SHAPE);
+        eprintln!("After fill_defaults: {:#?}", with_defaults);
+
+        // Check for missing fields
+        let mut missing_fields = Vec::new();
+        collect_missing_fields(
+            &with_defaults,
+            ArgsWithSubcommandAndBuiltins::SHAPE,
+            "",
+            &mut missing_fields,
+        );
+        eprintln!("Missing fields: {:?}", missing_fields);
+
+        // The test should show what's going wrong
+        assert!(
+            missing_fields.is_empty(),
+            "should have no missing fields, got: {:?}",
+            missing_fields
+        );
+
+        // Print the shape's fields to understand what the deserializer expects
+        eprintln!("\n--- Shape fields ---");
+        if let facet_core::Type::User(facet_core::UserType::Struct(s)) =
+            &ArgsWithSubcommandAndBuiltins::SHAPE.ty
+        {
+            for field in s.fields.iter() {
+                eprintln!(
+                    "Field: {} (flattened: {})",
+                    field.name,
+                    field.is_flattened()
+                );
+            }
+        }
+
+        // Now try the full deserialization
+        eprintln!("\n--- Deserializing ---");
+        let result: Result<ArgsWithSubcommandAndBuiltins, _> =
+            crate::config_value_parser::from_config_value(&with_defaults);
+        eprintln!("Deserialization result: {:?}", result);
+
+        // This should succeed
+        assert!(
+            result.is_ok(),
+            "deserialization should succeed: {:?}",
+            result
+        );
     }
 }

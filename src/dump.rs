@@ -37,12 +37,53 @@ pub(crate) fn collect_missing_fields(
         && let facet_core::Type::User(facet_core::UserType::Struct(s)) = &shape.ty
     {
         for field in s.fields {
+            let field_shape = field.shape.get();
+
+            // Handle flattened fields: their inner fields are at the current level
+            if field.is_flattened() {
+                if let facet_core::Type::User(facet_core::UserType::Struct(inner_s)) =
+                    &field_shape.ty
+                {
+                    for inner_field in inner_s.fields {
+                        let inner_path = if path_prefix.is_empty() {
+                            inner_field.name.to_string()
+                        } else {
+                            format!("{}.{}", path_prefix, inner_field.name)
+                        };
+                        let inner_shape = inner_field.shape.get();
+
+                        if let Some(val) = sourced.value.get(inner_field.name) {
+                            // Inner field exists at current level - recurse
+                            collect_missing_fields(val, inner_shape, &inner_path, missing);
+                        } else {
+                            // Inner field is missing - check if required
+                            let has_default = inner_field.default.is_some();
+                            let is_option = inner_shape.type_identifier.contains("Option");
+
+                            if !has_default && !is_option {
+                                let doc_comment = if inner_field.doc.is_empty() {
+                                    None
+                                } else {
+                                    Some(inner_field.doc.join("\n"))
+                                };
+                                missing.push(MissingFieldInfo {
+                                    field_name: inner_field.name.to_string(),
+                                    field_path: inner_path,
+                                    type_name: inner_shape.type_identifier.to_string(),
+                                    doc_comment,
+                                });
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
             let field_path = if path_prefix.is_empty() {
                 field.name.to_string()
             } else {
                 format!("{}.{}", path_prefix, field.name)
             };
-            let field_shape = field.shape.get();
 
             if let Some(val) = sourced.value.get(field.name) {
                 // Field exists - recurse into nested structs

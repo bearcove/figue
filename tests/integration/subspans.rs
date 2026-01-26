@@ -23,7 +23,7 @@ fn test_eq_short_solo() {
     assert_eq!(args.k, 3);
 }
 
-#[test]
+#[facet_testhelpers::test]
 fn test_eq_long_rename_solo() {
     #[derive(Facet, Debug)]
     struct Args {

@@ -295,9 +295,9 @@ fn config_struct_schema_from_shape_with_prefix(
                 }
             };
 
-            // Build the new path prefix including this field
+            // Build the new path prefix including this field's effective name
             let mut new_prefix = path_prefix.clone();
-            new_prefix.push(field.name.to_string());
+            new_prefix.push(field.effective_name().to_string());
 
             // Recursively process the inner struct's fields
             let inner = config_struct_schema_from_shape_with_prefix(
@@ -328,12 +328,14 @@ fn config_struct_schema_from_shape_with_prefix(
         let docs = docs_from_lines(field.doc);
         let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
-        // Build target path: prefix + this field's name
+        // Build target path: prefix + this field's effective (serialized) name
+        // This is the name as it appears in the wire format (after rename)
+        let effective_name = field.effective_name().to_string();
         let mut target_path = path_prefix.clone();
-        target_path.push(field.name.to_string());
+        target_path.push(effective_name.clone());
 
         fields_map.insert(
-            field.name.to_string(),
+            effective_name,
             ConfigFieldSchema {
                 docs,
                 value,
@@ -657,13 +659,14 @@ fn arg_level_from_fields_with_prefix(
         }
 
         let docs = docs_from_lines(field.doc);
+        let effective_name = field.effective_name().to_string();
 
-        // Build target path: prefix + this field's name
+        // Build target path: prefix + this field's effective (serialized) name
         let mut target_path = path_prefix.clone();
-        target_path.push(field.name.to_string());
+        target_path.push(effective_name.clone());
 
         let arg = ArgSchema {
-            name: field.effective_name().to_string(),
+            name: effective_name.clone(),
             docs,
             kind,
             value,
@@ -672,7 +675,7 @@ fn arg_level_from_fields_with_prefix(
             target_path,
         };
 
-        args.insert(field.effective_name().to_string(), arg);
+        args.insert(effective_name, arg);
     }
 
     Ok(ArgLevelSchema {

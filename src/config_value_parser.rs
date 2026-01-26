@@ -7,6 +7,7 @@
 use std::vec::Vec;
 
 use facet_core::{Facet, Shape, Type, UserType};
+// Note: Shape is still used by fill_defaults_from_shape and coerce_types_from_shape
 use facet_format::{
     ContainerKind, FieldKey, FieldLocationHint, FormatDeserializer, FormatParser, ParseEvent,
     ScalarValue,
@@ -61,7 +62,7 @@ where
         "from_config_value: after coerce_types_from_shape"
     );
 
-    let parser = ConfigValueParser::new(&value_coerced, T::SHAPE);
+    let parser = ConfigValueParser::new(&value_coerced);
     let mut deserializer = FormatDeserializer::new_owned(parser);
     deserializer
         .deserialize()
@@ -103,6 +104,42 @@ fn fill_defaults_from_shape_recursive(
 
             // For each field in the struct shape, check if it's missing in the ConfigValue
             for field in fields.iter() {
+                // Handle flattened fields: their inner fields should appear at the
+                // CURRENT level, not nested under the field name.
+                // The facet-format deserializer handles collecting them into the nested struct.
+                if field.is_flattened() {
+                    let inner_shape = field.shape.get();
+                    let inner_fields = match &inner_shape.ty {
+                        Type::User(UserType::Struct(s)) => &s.fields,
+                        _ => continue, // Skip if not a struct (shouldn't happen for flatten)
+                    };
+
+                    // For each inner field, add default if missing at the CURRENT level
+                    for inner_field in inner_fields.iter() {
+                        if !new_map.contains_key(inner_field.name) {
+                            let inner_path = if path_prefix.is_empty() {
+                                inner_field.name.to_string()
+                            } else {
+                                format!("{}.{}", path_prefix, inner_field.name)
+                            };
+                            if let Some(default_value) =
+                                get_default_config_value(inner_field, &inner_path)
+                            {
+                                tracing::debug!(
+                                    field = inner_field.name,
+                                    parent_field = field.name,
+                                    shape = shape.type_identifier,
+                                    ?default_value,
+                                    "fill_defaults_from_shape_recursive: inserting default for flattened field"
+                                );
+                                new_map.insert(inner_field.name.to_string(), default_value);
+                            }
+                        }
+                    }
+                    // Don't create a nested object for flattened fields
+                    continue;
+                }
+
                 if !new_map.contains_key(field.name) {
                     // Field is missing - get default or create Missing marker
                     // Returns None if the field has a default that can't be serialized -
@@ -128,13 +165,34 @@ fn fill_defaults_from_shape_recursive(
             // Recursively process nested objects
             for (key, val) in new_map.iter_mut() {
                 // Find the corresponding field shape
-                if let Some(field) = fields.iter().find(|f| f.name == key) {
+                // First check direct (non-flattened) fields
+                if let Some(field) = fields.iter().find(|f| f.name == key && !f.is_flattened()) {
                     let field_path = if path_prefix.is_empty() {
                         key.to_string()
                     } else {
                         format!("{}.{}", path_prefix, key)
                     };
                     *val = fill_defaults_from_shape_recursive(val, field.shape.get(), &field_path);
+                } else {
+                    // Check if key matches an inner field of a flattened struct
+                    for field in fields.iter().filter(|f| f.is_flattened()) {
+                        let inner_shape = field.shape.get();
+                        if let Type::User(UserType::Struct(s)) = &inner_shape.ty
+                            && let Some(inner_field) = s.fields.iter().find(|f| f.name == key)
+                        {
+                            let field_path = if path_prefix.is_empty() {
+                                key.to_string()
+                            } else {
+                                format!("{}.{}", path_prefix, key)
+                            };
+                            *val = fill_defaults_from_shape_recursive(
+                                val,
+                                inner_field.shape.get(),
+                                &field_path,
+                            );
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -451,9 +509,8 @@ impl ConfigValueDeserializeError {
 
 /// Parser that emits events from a `ConfigValue` tree.
 ///
-/// This parser tracks shape context as it descends into nested structures,
-/// allowing it to translate original field names (used in ConfigValue) to
-/// effective names (respecting `#[facet(rename = "...")]` attributes).
+/// This is a simple parser that just emits what's in the ConfigValue.
+/// It does NOT do any Shape-based transformations - that's the deserializer's job.
 pub struct ConfigValueParser<'input> {
     /// Stack of values to process.
     stack: Vec<StackFrame<'input>>,
@@ -466,39 +523,35 @@ pub struct ConfigValueParser<'input> {
 /// A frame on the parsing stack.
 enum StackFrame<'input> {
     /// Processing an object - emit key-value pairs.
-    /// The shape is the struct shape, used to look up field metadata for rename translation.
     Object {
-        entries: Vec<(&'input str, &'input ConfigValue, Option<&'static Shape>)>,
+        entries: Vec<(&'input str, &'input ConfigValue)>,
         index: usize,
-        shape: Option<&'static Shape>,
     },
     /// Processing an array - emit items in sequence.
     Array {
         items: &'input [ConfigValue],
         index: usize,
-        element_shape: Option<&'static Shape>,
     },
-    /// A single value to emit with its expected shape.
-    Value(&'input ConfigValue, Option<&'static Shape>),
+    /// A single value to emit.
+    Value(&'input ConfigValue),
     /// Processing an enum variant - externally tagged format: {"VariantName": {...}}
     /// Phase 0: emit FieldKey with variant name
     /// Phase 1: emit variant content (struct with fields, or Unit for unit variants)
     /// Phase 2: emit StructEnd
     Enum {
         variant: &'input str,
-        fields: Vec<(&'input str, &'input ConfigValue, Option<&'static Shape>)>,
+        fields: Vec<(&'input str, &'input ConfigValue)>,
         phase: u8,
-        shape: Option<&'static Shape>,
-        /// The variant's struct kind - needed to distinguish empty struct variants from unit variants
-        variant_kind: facet_core::StructKind,
+        /// Whether this is a unit variant (no fields) vs struct/tuple variant
+        is_unit: bool,
     },
 }
 
 impl<'input> ConfigValueParser<'input> {
     /// Create a new parser from a `ConfigValue`.
-    pub fn new(value: &'input ConfigValue, target_shape: &'static Shape) -> Self {
+    pub fn new(value: &'input ConfigValue) -> Self {
         Self {
-            stack: vec![StackFrame::Value(value, Some(target_shape))],
+            stack: vec![StackFrame::Value(value)],
             last_span: None,
             peeked: None,
         }
@@ -516,41 +569,108 @@ impl<'input> ConfigValueParser<'input> {
         }
     }
 
-    /// Look up a field by its original name in a struct shape and return its effective name.
-    /// Falls back to the original name if the shape is not a struct or field is not found.
-    fn get_effective_field_name(
-        original_name: &'input str,
-        shape: Option<&'static Shape>,
-    ) -> &'input str {
-        if let Some(shape) = shape
-            && let Type::User(UserType::Struct(s)) = &shape.ty
-            && let Some(field) = s.fields.iter().find(|f| f.name == original_name)
-        {
-            // SAFETY: effective_name returns &'static str which outlives 'input
-            return field.effective_name();
-        }
-        original_name
-    }
+    /// Build probe evidence from the current value.
+    /// Returns field names and optionally scalar values for the solver.
+    fn build_probe_evidence(&self) -> Vec<facet_format::FieldEvidence<'input>> {
+        use std::borrow::Cow;
 
-    /// Get the shape of a field by its original name from a struct shape.
-    fn get_field_shape(
-        original_name: &str,
-        shape: Option<&'static Shape>,
-    ) -> Option<&'static Shape> {
-        if let Some(shape) = shape
-            && let Type::User(UserType::Struct(s)) = &shape.ty
-            && let Some(field) = s.fields.iter().find(|f| f.name == original_name)
-        {
-            return Some(field.shape.get());
+        tracing::debug!(
+            stack_len = self.stack.len(),
+            "build_probe_evidence: starting"
+        );
+
+        // Get the root value from the stack
+        let root_value = match self.stack.first() {
+            Some(StackFrame::Value(v)) => {
+                tracing::debug!("build_probe_evidence: found Value frame");
+                *v
+            }
+            Some(StackFrame::Object { entries, .. }) => {
+                tracing::debug!(
+                    num_entries = entries.len(),
+                    "build_probe_evidence: found Object frame (already started)"
+                );
+                // If we've already started processing the object, we need to look at its entries
+                // This shouldn't happen normally, but let's handle it
+                return entries
+                    .iter()
+                    .map(|(key, _value)| {
+                        facet_format::FieldEvidence::new(
+                            Cow::Borrowed(*key),
+                            FieldLocationHint::KeyValue,
+                            None,
+                        )
+                    })
+                    .collect();
+            }
+            Some(_) => {
+                tracing::debug!("build_probe_evidence: unexpected frame type (Array or Enum)");
+                return Vec::new();
+            }
+            None => {
+                tracing::debug!("build_probe_evidence: empty stack");
+                return Vec::new();
+            }
+        };
+
+        // If it's an object, collect field evidence
+        match root_value {
+            ConfigValue::Object(sourced) => {
+                tracing::debug!(
+                    num_fields = sourced.value.len(),
+                    "build_probe_evidence: found Object"
+                );
+                sourced
+                    .value
+                    .iter()
+                    .map(|(key, value)| {
+                        // Capture scalar values for tag disambiguation
+                        let scalar_value = match value {
+                            ConfigValue::String(s) => {
+                                Some(ScalarValue::Str(Cow::Borrowed(&s.value)))
+                            }
+                            ConfigValue::Bool(b) => Some(ScalarValue::Bool(b.value)),
+                            ConfigValue::Integer(i) => Some(ScalarValue::I64(i.value)),
+                            ConfigValue::Float(f) => Some(ScalarValue::F64(f.value)),
+                            ConfigValue::Null(_) => Some(ScalarValue::Null),
+                            _ => None, // Objects/arrays are not captured
+                        };
+
+                        if let Some(sv) = scalar_value {
+                            facet_format::FieldEvidence::with_scalar_value(
+                                Cow::Borrowed(key.as_str()),
+                                FieldLocationHint::KeyValue,
+                                None,
+                                sv,
+                            )
+                        } else {
+                            facet_format::FieldEvidence::new(
+                                Cow::Borrowed(key.as_str()),
+                                FieldLocationHint::KeyValue,
+                                None,
+                            )
+                        }
+                    })
+                    .collect()
+            }
+            ConfigValue::Enum(sourced) => {
+                // For enum variants, the variant name IS the field key
+                // This matches the externally-tagged format: {"VariantName": {...}}
+                vec![facet_format::FieldEvidence::new(
+                    Cow::Borrowed(sourced.value.variant.as_str()),
+                    FieldLocationHint::KeyValue,
+                    None,
+                )]
+            }
+            _ => Vec::new(),
         }
-        None
     }
 }
 
 impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
     type Error = ConfigValueParseError;
     type Probe<'a>
-        = EmptyProbe
+        = ConfigValueProbe<'input>
     where
         Self: 'a;
 
@@ -567,32 +687,26 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
             };
 
             match frame {
-                StackFrame::Value(value, shape) => {
-                    return Ok(Some(self.emit_value(value, shape)?));
+                StackFrame::Value(value) => {
+                    return Ok(Some(self.emit_value(value)?));
                 }
-                StackFrame::Object {
-                    entries,
-                    index,
-                    shape,
-                } => {
+                StackFrame::Object { entries, index } => {
                     if index < entries.len() {
                         // Emit the next key-value pair
-                        let (original_key, value, field_shape) = entries[index];
+                        let (key, value) = entries[index];
 
                         // Push continuation for next entry
                         self.stack.push(StackFrame::Object {
                             entries: entries.clone(),
                             index: index + 1,
-                            shape,
                         });
 
-                        // Push value to process after key (with the field's shape)
-                        self.stack.push(StackFrame::Value(value, field_shape));
+                        // Push value to process after key
+                        self.stack.push(StackFrame::Value(value));
 
-                        // Emit key using effective name (respects #[facet(rename = "...")])
-                        let effective_key = Self::get_effective_field_name(original_key, shape);
+                        // Emit key as-is (no Shape-based translation)
                         return Ok(Some(ParseEvent::FieldKey(FieldKey::new(
-                            effective_key,
+                            key,
                             FieldLocationHint::KeyValue,
                         ))));
                     } else {
@@ -600,22 +714,16 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
                         return Ok(Some(ParseEvent::StructEnd));
                     }
                 }
-                StackFrame::Array {
-                    items,
-                    index,
-                    element_shape,
-                } => {
+                StackFrame::Array { items, index } => {
                     if index < items.len() {
                         // Push continuation for next item
                         self.stack.push(StackFrame::Array {
                             items,
                             index: index + 1,
-                            element_shape,
                         });
 
-                        // Push item to process with element shape
-                        self.stack
-                            .push(StackFrame::Value(&items[index], element_shape));
+                        // Push item to process
+                        self.stack.push(StackFrame::Value(&items[index]));
 
                         // Continue to process the value
                         continue;
@@ -628,8 +736,7 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
                     variant,
                     fields,
                     phase,
-                    shape,
-                    variant_kind,
+                    is_unit,
                 } => {
                     match phase {
                         0 => {
@@ -638,8 +745,7 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
                                 variant,
                                 fields,
                                 phase: 1,
-                                shape,
-                                variant_kind,
+                                is_unit,
                             });
                             return Ok(Some(ParseEvent::FieldKey(FieldKey::new(
                                 variant,
@@ -653,14 +759,10 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
                                 variant,
                                 fields: Vec::new(), // no longer needed
                                 phase: 2,
-                                shape: None,
-                                variant_kind: facet_core::StructKind::Unit, // not used in phase 2
+                                is_unit: true, // not used in phase 2
                             });
 
-                            // Use variant_kind to determine whether this is a unit or struct variant.
-                            // This is important because struct variants with all optional fields
-                            // may have empty fields but still need to be serialized as structs.
-                            if variant_kind == facet_core::StructKind::Unit {
+                            if is_unit {
                                 // Unit variant: emit Unit scalar
                                 return Ok(Some(ParseEvent::Scalar(ScalarValue::Unit)));
                             } else {
@@ -668,7 +770,6 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
                                 self.stack.push(StackFrame::Object {
                                     entries: fields,
                                     index: 0,
-                                    shape,
                                 });
                                 return Ok(Some(ParseEvent::StructStart(ContainerKind::Object)));
                             }
@@ -697,8 +798,10 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
     }
 
     fn begin_probe(&mut self) -> Result<Self::Probe<'_>, Self::Error> {
-        // We don't need probing for ConfigValue (it's already parsed)
-        Ok(EmptyProbe)
+        // Build probe evidence from the current value
+        // We look at the first stack frame which should be the root value
+        let evidence = self.build_probe_evidence();
+        Ok(ConfigValueProbe { evidence, index: 0 })
     }
 
     fn current_span(&self) -> Option<Span> {
@@ -708,24 +811,32 @@ impl<'input> FormatParser<'input> for ConfigValueParser<'input> {
     }
 }
 
-/// Empty probe stream for ConfigValueParser (we don't need evidence collection).
-pub struct EmptyProbe;
+/// Probe stream for ConfigValueParser that yields field evidence.
+pub struct ConfigValueProbe<'input> {
+    evidence: Vec<facet_format::FieldEvidence<'input>>,
+    index: usize,
+}
 
-impl<'de> facet_format::ProbeStream<'de> for EmptyProbe {
+impl<'input> facet_format::ProbeStream<'input> for ConfigValueProbe<'input> {
     type Error = ConfigValueParseError;
 
-    fn next(&mut self) -> Result<Option<facet_format::FieldEvidence<'de>>, Self::Error> {
-        Ok(None)
+    fn next(&mut self) -> Result<Option<facet_format::FieldEvidence<'input>>, Self::Error> {
+        if self.index < self.evidence.len() {
+            let ev = self.evidence[self.index].clone();
+            self.index += 1;
+            Ok(Some(ev))
+        } else {
+            Ok(None)
+        }
     }
 }
 
 /// Helper methods for emitting values.
 impl<'input> ConfigValueParser<'input> {
-    /// Emit an event for a single value, tracking the shape for nested structures.
+    /// Emit an event for a single value.
     fn emit_value(
         &mut self,
         value: &'input ConfigValue,
-        shape: Option<&'static Shape>,
     ) -> Result<ParseEvent<'input>, ConfigValueParseError> {
         match value {
             ConfigValue::Null(sourced) => {
@@ -753,14 +864,10 @@ impl<'input> ConfigValueParser<'input> {
             ConfigValue::Array(sourced) => {
                 self.update_span(sourced);
 
-                // Get element shape from the array/vec shape
-                let element_shape = shape.and_then(|s| s.inner);
-
                 // Push array processing
                 self.stack.push(StackFrame::Array {
                     items: &sourced.value,
                     index: 0,
-                    element_shape,
                 });
 
                 Ok(ParseEvent::SequenceStart(ContainerKind::Array))
@@ -768,64 +875,30 @@ impl<'input> ConfigValueParser<'input> {
             ConfigValue::Object(sourced) => {
                 self.update_span(sourced);
 
-                // Collect entries with their field shapes looked up from the struct shape
-                let entries: Vec<(&str, &ConfigValue, Option<&'static Shape>)> = sourced
-                    .value
-                    .iter()
-                    .map(|(k, v)| {
-                        let field_shape = Self::get_field_shape(k.as_str(), shape);
-                        (k.as_str(), v, field_shape)
-                    })
-                    .collect();
+                // Collect entries - just emit what's in the ConfigValue
+                let entries: Vec<(&str, &ConfigValue)> =
+                    sourced.value.iter().map(|(k, v)| (k.as_str(), v)).collect();
 
-                // Push object processing with shape for field name translation
-                self.stack.push(StackFrame::Object {
-                    entries,
-                    index: 0,
-                    shape,
-                });
+                // Push object processing
+                self.stack.push(StackFrame::Object { entries, index: 0 });
 
                 Ok(ParseEvent::StructStart(ContainerKind::Object))
             }
             ConfigValue::Enum(sourced) => {
                 self.update_span(sourced);
 
-                // For enums, find the variant from the enum shape.
-                // We search by both the original Rust name (v.name) and the effective name
-                // (v.effective_name()) to handle renamed variants. The CLI parser stores
-                // the effective_name, but we need the variant info to know the struct kind.
-                let variant_info: Option<&'static facet_core::Variant> = shape.and_then(|s| {
-                    if let Type::User(UserType::Enum(e)) = &s.ty {
-                        e.variants.iter().find(|v| {
-                            v.name == sourced.value.variant
-                                || v.effective_name() == sourced.value.variant
-                        })
-                    } else {
-                        None
-                    }
-                });
-
-                // Get fields and kind from the variant
-                let variant_fields = variant_info.map(|v| v.data.fields);
-                let variant_kind = variant_info
-                    .map(|v| v.data.kind)
-                    .unwrap_or(facet_core::StructKind::Unit);
-
-                // Collect entries with their field shapes from the variant's fields
-                let fields: Vec<(&str, &ConfigValue, Option<&'static Shape>)> = sourced
+                // Collect entries - just emit what's in the ConfigValue
+                let fields: Vec<(&str, &ConfigValue)> = sourced
                     .value
                     .fields
                     .iter()
-                    .map(|(k, v)| {
-                        let field_shape = variant_fields.and_then(|fields| {
-                            fields
-                                .iter()
-                                .find(|f| f.name == k.as_str())
-                                .map(|f| f.shape.get())
-                        });
-                        (k.as_str(), v, field_shape)
-                    })
+                    .map(|(k, v)| (k.as_str(), v))
                     .collect();
+
+                // Always treat enum variants as struct variants (emit StructStart/StructEnd).
+                // We can't distinguish unit variants from struct variants with all-default fields
+                // based on empty `fields` alone. The facet deserializer can handle empty structs.
+                let is_unit = false;
 
                 // Push enum processing frame (phase 0)
                 // This emits: StructStart, FieldKey(variant), content, StructEnd
@@ -834,8 +907,7 @@ impl<'input> ConfigValueParser<'input> {
                     variant: &sourced.value.variant,
                     fields,
                     phase: 0,
-                    shape: None, // Enum variants use fields directly, not a shape wrapper
-                    variant_kind,
+                    is_unit,
                 });
 
                 // Emit the outer struct start (the enum wrapper)
@@ -1061,7 +1133,7 @@ mod tests {
     #[test]
     fn test_parse_null() {
         let value = ConfigValue::Null(Sourced::new(()));
-        let mut parser = ConfigValueParser::new(&value, <()>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         assert!(matches!(event, Some(ParseEvent::Scalar(ScalarValue::Null))));
@@ -1073,7 +1145,7 @@ mod tests {
     #[test]
     fn test_parse_bool() {
         let value = ConfigValue::Bool(Sourced::new(true));
-        let mut parser = ConfigValueParser::new(&value, <bool>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         assert!(matches!(
@@ -1085,7 +1157,7 @@ mod tests {
     #[test]
     fn test_parse_integer() {
         let value = ConfigValue::Integer(Sourced::new(42));
-        let mut parser = ConfigValueParser::new(&value, <i64>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         assert!(matches!(
@@ -1097,7 +1169,7 @@ mod tests {
     #[test]
     fn test_parse_string() {
         let value = ConfigValue::String(Sourced::new("hello".to_string()));
-        let mut parser = ConfigValueParser::new(&value, <String>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         if let Some(ParseEvent::Scalar(ScalarValue::Str(s))) = event {
@@ -1110,7 +1182,7 @@ mod tests {
     #[test]
     fn test_parse_empty_array() {
         let value = ConfigValue::Array(Sourced::new(vec![]));
-        let mut parser = ConfigValueParser::new(&value, <Vec<i32>>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         // Should emit SequenceStart, then SequenceEnd
         let event = parser.next_event().unwrap();
@@ -1133,7 +1205,7 @@ mod tests {
             ConfigValue::Integer(Sourced::new(2)),
             ConfigValue::Integer(Sourced::new(3)),
         ]));
-        let mut parser = ConfigValueParser::new(&value, <Vec<i64>>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         assert!(matches!(event, Some(ParseEvent::SequenceStart(_))));
@@ -1166,7 +1238,7 @@ mod tests {
     #[test]
     fn test_parse_empty_object() {
         let value = ConfigValue::Object(Sourced::new(indexmap::IndexMap::default()));
-        let mut parser = ConfigValueParser::new(&value, <()>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         assert!(matches!(
@@ -1191,7 +1263,7 @@ mod tests {
         map.insert("age".to_string(), ConfigValue::Integer(Sourced::new(30)));
 
         let value = ConfigValue::Object(Sourced::new(map));
-        let mut parser = ConfigValueParser::new(&value, <()>::SHAPE);
+        let mut parser = ConfigValueParser::new(&value);
 
         let event = parser.next_event().unwrap();
         assert!(matches!(event, Some(ParseEvent::StructStart(_))));
@@ -1290,5 +1362,238 @@ mod tests {
         assert_eq!(config.port, 8080);
         assert_eq!(config.smtp.host, "smtp.example.com");
         assert_eq!(config.smtp.port, 587);
+    }
+
+    // ========================================================================
+    // Tests: fill_defaults_from_shape
+    // ========================================================================
+
+    #[test]
+    fn test_fill_defaults_simple_struct() {
+        use facet::Facet;
+
+        #[derive(Debug, Facet, PartialEq)]
+        struct Config {
+            #[facet(default)]
+            enabled: bool,
+            port: i64,
+        }
+
+        // Input has port but not enabled
+        let mut map = indexmap::IndexMap::default();
+        map.insert("port".to_string(), ConfigValue::Integer(Sourced::new(8080)));
+        let input = ConfigValue::Object(Sourced::new(map));
+
+        let result = fill_defaults_from_shape(&input, Config::SHAPE);
+
+        // Should have both fields
+        if let ConfigValue::Object(obj) = result {
+            assert!(obj.value.contains_key("port"), "should have port");
+            assert!(
+                obj.value.contains_key("enabled"),
+                "should have enabled with default"
+            );
+            if let ConfigValue::Bool(b) = &obj.value["enabled"] {
+                assert!(!b.value, "enabled default should be false");
+            } else {
+                panic!("enabled should be a bool");
+            }
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    #[test]
+    fn test_fill_defaults_with_flatten() {
+        use facet::Facet;
+
+        #[derive(Debug, Facet, PartialEq, Default)]
+        struct CommonOpts {
+            #[facet(default)]
+            verbose: bool,
+            #[facet(default)]
+            debug: bool,
+        }
+
+        #[derive(Debug, Facet, PartialEq)]
+        struct Config {
+            name: String,
+            #[facet(flatten)]
+            common: CommonOpts,
+        }
+
+        // Input has only name - common fields should be flattened as defaults
+        let mut map = indexmap::IndexMap::default();
+        map.insert(
+            "name".to_string(),
+            ConfigValue::String(Sourced::new("test".to_string())),
+        );
+        let input = ConfigValue::Object(Sourced::new(map));
+
+        let result = fill_defaults_from_shape(&input, Config::SHAPE);
+
+        // For flattened fields, the defaults should be at the TOP level
+        // (verbose, debug) NOT nested under "common"
+        if let ConfigValue::Object(obj) = result {
+            assert!(obj.value.contains_key("name"), "should have name");
+
+            // The key insight: flattened fields should NOT create a nested "common" object.
+            // Instead, verbose and debug should be at the top level.
+            assert!(
+                obj.value.contains_key("verbose"),
+                "should have verbose at top level (flattened)"
+            );
+            assert!(
+                obj.value.contains_key("debug"),
+                "should have debug at top level (flattened)"
+            );
+            assert!(
+                !obj.value.contains_key("common"),
+                "should NOT have nested 'common' object"
+            );
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    #[test]
+    fn test_fill_defaults_flatten_preserves_existing() {
+        use facet::Facet;
+
+        #[derive(Debug, Facet, PartialEq, Default)]
+        struct CommonOpts {
+            #[facet(default)]
+            verbose: bool,
+            #[facet(default)]
+            debug: bool,
+        }
+
+        #[derive(Debug, Facet, PartialEq)]
+        struct Config {
+            name: String,
+            #[facet(flatten)]
+            common: CommonOpts,
+        }
+
+        // Input has name and verbose (already provided)
+        let mut map = indexmap::IndexMap::default();
+        map.insert(
+            "name".to_string(),
+            ConfigValue::String(Sourced::new("test".to_string())),
+        );
+        map.insert("verbose".to_string(), ConfigValue::Bool(Sourced::new(true)));
+        let input = ConfigValue::Object(Sourced::new(map));
+
+        let result = fill_defaults_from_shape(&input, Config::SHAPE);
+
+        if let ConfigValue::Object(obj) = result {
+            // verbose should be preserved as true
+            if let ConfigValue::Bool(b) = &obj.value["verbose"] {
+                assert!(b.value, "verbose should be true (preserved)");
+            }
+            // debug should be filled with default false
+            assert!(obj.value.contains_key("debug"), "should have debug");
+            if let ConfigValue::Bool(b) = &obj.value["debug"] {
+                assert!(!b.value, "debug should be false (default)");
+            }
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    #[test]
+    fn test_fill_defaults_subcommand_with_flatten() {
+        use facet::Facet;
+
+        // This reproduces the exact issue from GitHub #3
+
+        #[derive(Debug, Facet, PartialEq, Default)]
+        struct Builtins {
+            #[facet(default)]
+            help: bool,
+            #[facet(default)]
+            version: bool,
+        }
+
+        #[derive(Debug, Facet, PartialEq)]
+        #[repr(u8)]
+        enum Command {
+            Build { release: bool },
+        }
+
+        #[derive(Debug, Facet)]
+        struct Args {
+            command: Command,
+            #[facet(flatten)]
+            builtins: Builtins,
+        }
+
+        // Input: command is present, builtins fields should be flattened
+        let mut fields = indexmap::IndexMap::default();
+        fields.insert("release".to_string(), ConfigValue::Bool(Sourced::new(true)));
+        let enum_value = ConfigValue::Enum(Sourced::new(crate::config_value::EnumValue {
+            variant: "Build".to_string(),
+            fields,
+        }));
+
+        let mut map = indexmap::IndexMap::default();
+        map.insert("command".to_string(), enum_value);
+        let input = ConfigValue::Object(Sourced::new(map));
+
+        let result = fill_defaults_from_shape(&input, Args::SHAPE);
+
+        if let ConfigValue::Object(obj) = result {
+            // command should be preserved
+            assert!(obj.value.contains_key("command"), "should have command");
+
+            // builtins fields should be flattened at top level
+            assert!(
+                obj.value.contains_key("help"),
+                "should have help at top level"
+            );
+            assert!(
+                obj.value.contains_key("version"),
+                "should have version at top level"
+            );
+            assert!(
+                !obj.value.contains_key("builtins"),
+                "should NOT have nested 'builtins'"
+            );
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    #[facet_testhelpers::test]
+    fn test_full_deserialization_with_flatten() {
+        use facet::Facet;
+
+        #[derive(Debug, Facet, PartialEq, Default)]
+        struct CommonOpts {
+            #[facet(default)]
+            verbose: bool,
+        }
+
+        #[derive(Debug, Facet, PartialEq)]
+        struct Config {
+            name: String,
+            #[facet(flatten)]
+            common: CommonOpts,
+        }
+
+        // Build ConfigValue with flattened structure (as CLI parser would produce)
+        let mut map = indexmap::IndexMap::default();
+        map.insert(
+            "name".to_string(),
+            ConfigValue::String(Sourced::new("test".to_string())),
+        );
+        map.insert("verbose".to_string(), ConfigValue::Bool(Sourced::new(true)));
+        let input = ConfigValue::Object(Sourced::new(map));
+
+        // This should deserialize correctly with flattened fields at top level
+        let config: Config = from_config_value(&input).expect("should deserialize");
+
+        assert_eq!(config.name, "test");
+        assert!(config.common.verbose);
     }
 }
