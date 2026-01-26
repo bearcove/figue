@@ -1,7 +1,6 @@
 //! Config file format abstraction for layered configuration.
 //!
 //! This module is under active development and not yet wired into the main API.
-#![allow(dead_code)]
 //!
 //! This module provides the [`ConfigFormat`] trait for pluggable config file parsing,
 //! along with a built-in [`JsonFormat`] implementation.

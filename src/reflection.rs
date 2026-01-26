@@ -1,27 +1,5 @@
 use crate::config_value::{ConfigValue, Sourced};
 
-/// Check if a field is marked with `args::counted`.
-#[deprecated(note = "move to schema/from_schema.rs")]
-pub(crate) fn is_counted_field(field: &facet_core::Field) -> bool {
-    field.has_attr(Some("args"), "counted")
-}
-
-/// Check if a shape is a supported type for counted fields (integer types).
-#[deprecated(note = "move to schema/from_schema.rs")]
-pub(crate) const fn is_supported_counted_type(shape: &'static facet_core::Shape) -> bool {
-    use facet_core::{NumericType, PrimitiveType, Type};
-    matches!(
-        shape.ty,
-        Type::Primitive(PrimitiveType::Numeric(NumericType::Integer { .. }))
-    )
-}
-
-/// Check if a field is marked with `args::config`.
-#[deprecated(note = "move to schema/from_schema.rs")]
-pub(crate) fn is_config_field(field: &facet_core::Field) -> bool {
-    field.has_attr(Some("args"), "config")
-}
-
 /// Coerce ConfigValue types based on the target shape.
 /// This is needed because environment variables always come in as strings,
 /// but we want to display them with their proper types (int, bool, etc).

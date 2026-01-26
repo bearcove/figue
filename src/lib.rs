@@ -1,7 +1,6 @@
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
 // Allow deprecated during transition to new driver-based API
-#![allow(deprecated)]
 #![doc = include_str!("../README.md")]
 
 extern crate self as figue;

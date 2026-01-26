@@ -27,7 +27,6 @@
 //! - Outputs LayerOutput (ConfigValue + diagnostics), not a Partial
 //! - Does NOT set defaults (that's the driver's job)
 //! - Reports errors properly (no silent skipping)
-#![allow(dead_code)]
 
 use std::hash::RandomState;
 use std::string::{String, ToString};
@@ -120,7 +119,7 @@ impl CliConfigBuilder {
 /// - `schema.config` overrides: `--config.port 8080` style dotted paths
 pub fn parse_cli(schema: &Schema, cli_config: &CliConfig) -> LayerOutput {
     let args: Vec<&str> = cli_config.args().iter().map(|s| s.as_str()).collect();
-    let mut ctx = ParseContext::new(&args, schema, cli_config.strict());
+    let mut ctx = ParseContext::new(&args, schema);
     ctx.parse();
     ctx.into_output()
 }
@@ -181,8 +180,6 @@ struct ParseContext<'a> {
     positional_only: bool,
     /// Counted flag accumulators: field_name -> accumulator
     counted: IndexMap<String, CountedAccumulator, RandomState>,
-    /// Whether to error on unknown arguments
-    strict: bool,
     /// Byte offset where each argument starts in the flattened string (args joined by spaces)
     arg_offsets: Vec<usize>,
     /// Stack of parent levels for the adoption agency algorithm.
@@ -191,7 +188,7 @@ struct ParseContext<'a> {
 }
 
 impl<'a> ParseContext<'a> {
-    fn new(args: &'a [&'a str], schema: &'a Schema, strict: bool) -> Self {
+    fn new(args: &'a [&'a str], schema: &'a Schema) -> Self {
         // Compute byte offsets for each argument in the flattened string
         // When args are joined with spaces: "arg0 arg1 arg2"
         // arg0 starts at 0, arg1 starts at len(arg0)+1, etc.
@@ -213,7 +210,6 @@ impl<'a> ParseContext<'a> {
             diagnostics: Vec::new(),
             positional_only: false,
             counted: IndexMap::default(),
-            strict,
             arg_offsets,
             parent_stack: Vec::new(),
         }
@@ -834,11 +830,6 @@ impl<'a> ParseContext<'a> {
                 }
             }
         }
-    }
-
-    /// Insert a value at a dotted path (for config overrides like --config.foo.bar).
-    fn insert_at_path(&mut self, path: &[&str], value: ConfigValue) {
-        insert_nested(&mut self.result, path, value);
     }
 
     /// Check if a value exists at the given name.

@@ -1,18 +1,14 @@
 //! Builder API for layered configuration.
 //!
 //! This module is under active development.
-#![allow(dead_code)]
-#![allow(deprecated)]
 #![allow(private_interfaces)]
 
 use std::marker::PhantomData;
-
 use std::string::String;
-use std::vec::Vec;
 
 use camino::Utf8PathBuf;
 use facet::Facet;
-use facet_reflect::{Partial, ReflectError};
+use facet_reflect::ReflectError;
 
 use crate::{
     config_format::{ConfigFormat, ConfigFormatError},
@@ -23,7 +19,7 @@ use crate::{
         env::{EnvConfig, EnvConfigBuilder},
         file::FileConfig,
     },
-    provenance::{ConfigResult, FilePathStatus, FileResolution, Provenance},
+    provenance::ConfigResult,
     schema::{Schema, error::SchemaError},
 };
 
@@ -42,10 +38,8 @@ where
     T: Facet<'static>,
 {
     let schema = Schema::from_shape(T::SHAPE)?;
-    let destination = Partial::alloc::<T>().map_err(BuilderError::Alloc)?;
     Ok(ConfigBuilder {
         _phantom: PhantomData,
-        partial: destination,
         schema,
         cli_config: None,
         help_config: None,
@@ -57,8 +51,6 @@ where
 /// Builder for layered configuration parsing.
 pub struct ConfigBuilder<T> {
     _phantom: PhantomData<T>,
-    /// The partially allocated destination structure where parsed values land.
-    partial: Partial<'static>,
     /// Parsed schema for the target type.
     schema: Schema,
     /// CLI parsing settings, if the user configured that layer.
@@ -157,181 +149,7 @@ impl<T> ConfigBuilder<T> {
     pub fn build_traced(self) -> Result<ConfigResult<ConfigValue>, BuilderError> {
         panic!("build_traced is being moved to the driver API")
     }
-
-    /// Load and parse the config file if specified.
-    fn load_config_file(
-        file_config: &FileConfig,
-    ) -> Result<(Option<ConfigValue>, FileResolution), BuilderError> {
-        let mut resolution = FileResolution::new();
-
-        // Check if explicit path was provided
-        if let Some(ref explicit) = file_config.explicit_path {
-            let exists = std::path::Path::new(explicit.as_str()).exists();
-            resolution.add_explicit(explicit.clone(), exists);
-
-            if !exists {
-                return Err(BuilderError::FileNotFound {
-                    path: explicit.clone(),
-                });
-            }
-
-            // Mark default paths as not tried
-            resolution.mark_defaults_not_tried(&file_config.default_paths);
-
-            // Read and parse the explicit file
-            let contents = std::fs::read_to_string(explicit.as_str())
-                .map_err(|e| BuilderError::FileRead(explicit.clone(), e.to_string()))?;
-
-            let value = file_config
-                .registry
-                .parse_file(explicit, &contents)
-                .map_err(|e| BuilderError::FileParse(explicit.clone(), e))?;
-
-            return Ok((Some(value), resolution));
-        }
-
-        // No explicit path, try defaults in order
-        let mut found_path: Option<Utf8PathBuf> = None;
-
-        for path in &file_config.default_paths {
-            let exists = std::path::Path::new(path.as_str()).exists();
-
-            if exists && found_path.is_none() {
-                // This is the first one that exists - pick it
-                resolution.add_default(path.clone(), FilePathStatus::Picked);
-                found_path = Some(path.clone());
-            } else {
-                // Either doesn't exist, or we already found one
-                let status = if exists {
-                    FilePathStatus::NotTried // Exists but we picked an earlier one
-                } else {
-                    FilePathStatus::Absent
-                };
-                resolution.add_default(path.clone(), status);
-            }
-        }
-
-        let Some(path) = found_path else {
-            return Ok((None, resolution));
-        };
-
-        // Read and parse the picked file
-        let contents = std::fs::read_to_string(path.as_str())
-            .map_err(|e| BuilderError::FileRead(path.clone(), e.to_string()))?;
-
-        let value = file_config
-            .registry
-            .parse_file(&path, &contents)
-            .map_err(|e| BuilderError::FileParse(path, e))?;
-
-        Ok((Some(value), resolution))
-    }
-
-    /// Parse CLI arguments into a ConfigValue tree.
-    ///
-    /// Handles:
-    /// - Long flags: `--version` (bool true), `--name value`
-    /// - Short flags: `-v` (bool true), `-n value`
-    /// - Dotted paths: `--config.server.port 8080`
-    /// - Boolean flags: `--flag` sets to true
-    #[deprecated(note = "this has nothing to do in builder and it's a duplicate parser")]
-    fn parse_cli_overrides(cli_config: &CliConfig) -> Result<Option<ConfigValue>, BuilderError> {
-        use crate::config_value::Sourced;
-        use heck::ToSnakeCase;
-        use indexmap::IndexMap;
-
-        let mut root = IndexMap::default();
-        let mut i = 0;
-
-        let args = cli_config.args();
-        while i < args.len() {
-            let arg = &args[i];
-
-            if let Some(flag) = arg.strip_prefix("--") {
-                if flag.is_empty() {
-                    // "--" separator, skip rest
-                    break;
-                }
-
-                // Check for dotted path (e.g., --settings.server.port)
-                if flag.contains('.') {
-                    let parts: Vec<&str> = flag.split('.').collect();
-                    // Get the value from the next argument
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(BuilderError::CliParse(format!(
-                            "Missing value for --{}",
-                            flag
-                        )));
-                    }
-                    let value_str = &args[i];
-                    let arg_name = format!("--{}", flag);
-                    let value = parse_cli_value(value_str, &arg_name);
-                    insert_nested_value(&mut root, &parts, value);
-                } else {
-                    // Simple flag like --version or --name value
-                    let key = flag.to_snake_case();
-
-                    // Check if next arg looks like a value (not another flag)
-                    let has_value = i + 1 < args.len() && !args[i + 1].starts_with('-');
-
-                    if has_value {
-                        i += 1;
-                        let arg_name = format!("--{}", flag);
-                        let value = parse_cli_value(&args[i], &arg_name);
-                        root.insert(key, value);
-                    } else {
-                        // Boolean flag, set to true
-                        let arg_name = format!("--{}", flag);
-                        root.insert(
-                            key,
-                            ConfigValue::Bool(Sourced {
-                                value: true,
-                                span: None,
-                                provenance: Some(Provenance::cli(arg_name, "true")),
-                            }),
-                        );
-                    }
-                }
-            } else if let Some(flag) = arg.strip_prefix('-') {
-                if flag.is_empty() {
-                    // Bare "-" (stdin), treat as positional, skip for now
-                    i += 1;
-                    continue;
-                }
-
-                // Short flags like -v or -n value
-                // For now, treat single char as boolean flag
-                // TODO: Handle -vvv counting, -abc chaining
-                for ch in flag.chars() {
-                    let key = ch.to_string();
-                    let arg_name = format!("-{}", ch);
-                    root.insert(
-                        key,
-                        ConfigValue::Bool(Sourced {
-                            value: true,
-                            span: None,
-                            provenance: Some(Provenance::cli(arg_name, "true")),
-                        }),
-                    );
-                }
-            } else {
-                // Positional argument - skip for now
-                // TODO: Handle positional args
-            }
-
-            i += 1;
-        }
-
-        if root.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(ConfigValue::Object(Sourced::new(root))))
-        }
-    }
 }
-
-use crate::config_value::{insert_nested_value, parse_cli_value};
 
 // ============================================================================
 // Help Configuration
@@ -529,8 +347,6 @@ mod tests {
     use super::*;
     use crate as args;
     use facet::Facet;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[derive(Facet)]
     struct TestConfig {
@@ -544,64 +360,6 @@ mod tests {
         port: u16,
         #[facet(args::named)]
         host: String,
-    }
-
-    #[test]
-    #[ignore = "build_traced is being moved to the driver API"]
-    fn test_builder_env_only() {
-        use crate::layers::env::MockEnv;
-
-        let env = MockEnv::from_pairs([
-            ("TEST_BUILDER__PORT", "8080"),
-            ("TEST_BUILDER__HOST", "localhost"),
-        ]);
-
-        let result = builder::<TestConfig>()
-            .unwrap()
-            .env(|e| e.prefix("TEST_BUILDER").source(env))
-            .build_traced()
-            .expect("should build");
-
-        if let ConfigValue::Object(obj) = &result.value {
-            assert!(obj.value.contains_key("port"));
-            assert!(obj.value.contains_key("host"));
-
-            if let Some(ConfigValue::String(port)) = obj.value.get("port") {
-                assert_eq!(port.value, "8080");
-            }
-        } else {
-            panic!("expected object");
-        }
-
-        // Check provenance was collected
-        assert!(result.provenance.contains_key("port"));
-        assert!(result.provenance.contains_key("host"));
-    }
-
-    #[test]
-    #[ignore = "build_traced is being moved to the driver API"]
-    fn test_builder_file_only() {
-        // Create a temp config file
-        let mut file = NamedTempFile::with_suffix(".json").unwrap();
-        writeln!(file, r#"{{"port": 9000, "host": "filehost"}}"#).unwrap();
-        let path = Utf8PathBuf::from_path_buf(file.path().to_path_buf()).unwrap();
-
-        let result = builder::<TestConfig>()
-            .unwrap()
-            .file(|f| f.path(path))
-            .build_traced()
-            .expect("should build");
-
-        if let ConfigValue::Object(obj) = &result.value {
-            if let Some(ConfigValue::Integer(port)) = obj.value.get("port") {
-                assert_eq!(port.value, 9000);
-            }
-            if let Some(ConfigValue::String(host)) = obj.value.get("host") {
-                assert_eq!(host.value, "filehost");
-            }
-        } else {
-            panic!("expected object");
-        }
     }
 
     #[test]

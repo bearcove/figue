@@ -1,5 +1,4 @@
 //! Parser that converts `ConfigValue` trees into `ParseEvent` streams for deserialization.
-#![allow(dead_code)]
 //!
 //! This allows us to deserialize `ConfigValue` into arbitrary Facet types using the
 //! standard `facet-format` deserializer infrastructure.
@@ -683,11 +682,6 @@ impl<'input> ConfigValueParser<'input> {
         }
     }
 
-    /// Get the most recent span.
-    pub fn last_span(&self) -> Option<Span> {
-        self.last_span
-    }
-
     /// Update the last span from a `Sourced` wrapper.
     fn update_span<T>(&mut self, sourced: &Sourced<T>) {
         if let Some(span) = sourced.span {
@@ -1045,22 +1039,8 @@ impl<'input> ConfigValueParser<'input> {
     }
 }
 
-/// Errors that can occur while parsing a `ConfigValue`.
-#[derive(Debug)]
-pub enum ConfigValueParseError {
-    /// Generic error message.
-    Message(String),
-}
-
-impl core::fmt::Display for ConfigValueParseError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ConfigValueParseError::Message(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl core::error::Error for ConfigValueParseError {}
+/// Error type for ConfigValue parsing (infallible - parsing always succeeds).
+pub type ConfigValueParseError = std::convert::Infallible;
 
 /// Serializer that builds a ConfigValue tree.
 pub struct ConfigValueSerializer {
