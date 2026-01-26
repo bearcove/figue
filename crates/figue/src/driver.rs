@@ -388,7 +388,7 @@ impl<T: Facet<'static>> Driver<T> {
                     if let Some(entry) = span_registry.lookup_by_offset(virtual_span.offset) {
                         let real_span = Span::new(entry.real_span.offset, entry.real_span.len);
                         let (name, contents) =
-                            get_source_for_provenance(&entry.provenance, &cli_args_source);
+                            get_source_for_provenance(&entry.provenance, &cli_args_source, &layers);
                         (Some(real_span), name, contents)
                     } else {
                         (None, "<unknown>".to_string(), cli_args_source.clone())
@@ -430,10 +430,23 @@ impl<T: Facet<'static>> Driver<T> {
 }
 
 /// Get the source name and contents for a provenance.
-fn get_source_for_provenance(provenance: &Provenance, cli_args_source: &str) -> (String, String) {
+fn get_source_for_provenance(
+    provenance: &Provenance,
+    cli_args_source: &str,
+    layers: &ConfigLayers,
+) -> (String, String) {
     match provenance {
         Provenance::Cli { .. } => ("<cli>".to_string(), cli_args_source.to_string()),
-        Provenance::Env { var, value } => (format!("${}", var), value.clone()),
+        Provenance::Env { .. } => {
+            // Use the virtual env document from the env layer
+            let source_text = layers
+                .env
+                .source_text
+                .as_ref()
+                .cloned()
+                .unwrap_or_default();
+            ("<env>".to_string(), source_text)
+        }
         Provenance::File { file, .. } => (file.path.to_string(), file.contents.clone()),
         Provenance::Default => ("<default>".to_string(), String::new()),
     }
