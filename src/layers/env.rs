@@ -306,8 +306,8 @@ impl<'a> EnvParseContext<'a> {
                 }
             };
 
-            // Parse the value and insert it at the target path
-            let config_value = self.parse_value(&value, &name);
+            // Parse the value with schema awareness and insert it at the target path
+            let config_value = self.parse_value_with_schema(&value, &name, &target_path);
             self.insert_at_path(&target_path, config_value);
         }
 
@@ -334,7 +334,7 @@ impl<'a> EnvParseContext<'a> {
                 if !self.has_value_at_path(&field_path)
                     && let Some(value) = source.get(alias)
                 {
-                    let config_value = self.parse_value(&value, alias);
+                    let config_value = self.parse_value_with_schema(&value, alias, &field_path);
                     self.insert_at_path(&field_path, config_value);
                     // Only use the first matching alias
                     break;
@@ -438,8 +438,51 @@ impl<'a> EnvParseContext<'a> {
         }
     }
 
-    fn parse_value(&self, value: &str, var_name: &str) -> ConfigValue {
+    /// Get the ConfigValueSchema for a path, if available.
+    fn get_value_schema_at_path(&self, path: &[String]) -> Option<&ConfigValueSchema> {
+        let config_schema = self.config_schema?;
+        config_schema.get_by_path(&path.to_vec())
+    }
+
+    /// Parse a value with schema awareness.
+    ///
+    /// If the target field is an enum, validates that the value is a known variant.
+    fn parse_value_with_schema(
+        &mut self,
+        value: &str,
+        var_name: &str,
+        target_path: &[String],
+    ) -> ConfigValue {
         let prov = Some(Provenance::env(var_name, value));
+
+        // Check if we have schema info for this path
+        if let Some(value_schema) = self.get_value_schema_at_path(target_path) {
+            // Unwrap Option wrapper if present
+            let inner_schema = match value_schema {
+                ConfigValueSchema::Option { value: inner, .. } => inner.as_ref(),
+                other => other,
+            };
+
+            // For enum fields, validate the value is a known variant
+            if let ConfigValueSchema::Enum(enum_schema) = inner_schema {
+                let variants = enum_schema.variants();
+                if !variants.contains_key(value) {
+                    // Unknown variant - emit a helpful error
+                    let valid_variants: Vec<&String> = variants.keys().collect();
+                    self.emit_warning(format!(
+                        "{}: unknown variant '{}' for {}. Valid variants are: {}",
+                        var_name,
+                        value,
+                        target_path.join("."),
+                        valid_variants
+                            .iter()
+                            .map(|v| format!("'{}'", v))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+        }
 
         // Check for comma-separated list
         if value.contains(',') {
@@ -1486,5 +1529,148 @@ mod tests {
         let value = output.value.expect("should have value");
         let url = get_nested(&value, &["config", "db", "url"]).expect("config.db.url");
         assert_eq!(get_string(url), Some("prefixed_value"));
+    }
+
+    // ========================================================================
+    // Tests: Schema-guided enum validation
+    // ========================================================================
+
+    /// Log level enum for testing enum validation
+    #[derive(Facet)]
+    #[repr(u8)]
+    #[allow(dead_code)]
+    enum LogLevel {
+        Debug,
+        Info,
+        Warn,
+        Error,
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithEnum {
+        log_level: LogLevel,
+        port: u16,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithEnumConfig {
+        #[facet(args::config)]
+        config: ConfigWithEnum,
+    }
+
+    #[test]
+    fn test_enum_valid_variant_no_warning() {
+        // Valid variant should not produce a warning
+        let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__LOG_LEVEL", "Debug")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "valid enum variant should not produce warnings: {:?}",
+            output.diagnostics
+        );
+
+        let value = output.value.expect("should have value");
+        let log_level = get_nested(&value, &["config", "log_level"]).expect("config.log_level");
+        assert_eq!(get_string(log_level), Some("Debug"));
+    }
+
+    #[test]
+    fn test_enum_invalid_variant_produces_warning() {
+        // Invalid variant should produce a warning with helpful message
+        let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__LOG_LEVEL", "Debugg")]); // typo
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        // Should have a warning
+        assert!(
+            !output.diagnostics.is_empty(),
+            "invalid enum variant should produce a warning"
+        );
+
+        // Warning should mention the invalid value and valid variants
+        let warning = &output.diagnostics[0];
+        assert!(
+            warning.message.contains("Debugg"),
+            "warning should mention the invalid value: {}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("Debug")
+                && warning.message.contains("Info")
+                && warning.message.contains("Warn")
+                && warning.message.contains("Error"),
+            "warning should list valid variants: {}",
+            warning.message
+        );
+
+        // Value should still be set (the driver will do the actual parsing/rejection)
+        let value = output.value.expect("should have value");
+        let log_level = get_nested(&value, &["config", "log_level"]).expect("config.log_level");
+        assert_eq!(get_string(log_level), Some("Debugg"));
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithOptionalEnum {
+        log_level: Option<LogLevel>,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithOptionalEnumConfig {
+        #[facet(args::config)]
+        config: ConfigWithOptionalEnum,
+    }
+
+    #[test]
+    fn test_optional_enum_validation() {
+        // Optional enum should also be validated
+        let schema = Schema::from_shape(ArgsWithOptionalEnumConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__LOG_LEVEL", "invalid")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        // Should have a warning even for optional enum
+        assert!(
+            !output.diagnostics.is_empty(),
+            "invalid optional enum variant should produce a warning"
+        );
+    }
+
+    #[derive(Facet)]
+    struct NestedConfigWithEnum {
+        logging: LoggingConfig,
+    }
+
+    #[derive(Facet)]
+    struct LoggingConfig {
+        level: LogLevel,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithNestedEnumConfig {
+        #[facet(args::config)]
+        config: NestedConfigWithEnum,
+    }
+
+    #[test]
+    fn test_nested_enum_validation() {
+        // Enum in nested struct should be validated
+        let schema = Schema::from_shape(ArgsWithNestedEnumConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__LOGGING__LEVEL", "unknown")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        // Should have a warning
+        assert!(
+            !output.diagnostics.is_empty(),
+            "invalid nested enum variant should produce a warning"
+        );
     }
 }
