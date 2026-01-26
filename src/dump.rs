@@ -3,29 +3,13 @@
 
 use crate::{
     config_value::ConfigValue,
-    missing::MissingFieldInfo,
-    provenance::{ConfigResult, FilePathStatus, FileResolution, Provenance},
-    reflection::{coerce_types_from_shape, find_config_field, get_env_prefix},
+    provenance::{FilePathStatus, FileResolution, Provenance},
     schema::{ArgSchema, ConfigFieldSchema, ConfigValueSchema, Schema},
 };
-use facet::Facet;
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;
-
-/// Dump config with special markers for missing required fields to stdout.
-#[deprecated(note = "just use dump_config_with_provenance")]
-pub(crate) fn dump_config_with_missing_fields<T: Facet<'static>>(
-    value: &ConfigValue,
-    file_resolution: &FileResolution,
-    _missing_fields: &[MissingFieldInfo],
-    _env_prefix: &str,
-) {
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    dump_config_with_provenance::<T>(&mut handle, value, file_resolution);
-}
 
 /// A line to be printed in the config dump.
 #[derive(Debug)]
@@ -60,31 +44,6 @@ impl DumpState {
 }
 
 impl DumpContext {
-    /// Extract dump context from the shape.
-    fn from_shape<T: Facet<'static>>() -> Self {
-        let config_field = find_config_field(T::SHAPE);
-        let (config_field_name, env_prefix) = if let Some(field) = config_field {
-            (
-                field.name.to_string(),
-                get_env_prefix(field).map(|s| s.to_string()),
-            )
-        } else {
-            ("settings".to_string(), None)
-        };
-
-        // Check for FACET_ARGS_BLAST_IT env var to disable truncation
-        let blast_it = std::env::var("FACET_ARGS_BLAST_IT")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(false);
-
-        Self {
-            config_field_name,
-            env_prefix,
-            max_string_length: if blast_it { usize::MAX } else { 50 },
-            max_value_width: 50, // Maximum width for value column
-        }
-    }
-
     /// Extract dump context from the schema.
     fn from_schema(schema: &Schema) -> Self {
         let config = schema.config();
@@ -107,29 +66,6 @@ impl DumpContext {
             max_value_width: 50,
         }
     }
-}
-
-/// Dump the ConfigValue tree with provenance information from a ConfigResult to stdout.
-#[deprecated(note = "just use dump_config_with_provenance")]
-pub(crate) fn dump_config_from_result<T: Facet<'static>>(result: &ConfigResult<ConfigValue>) {
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    dump_config_with_provenance::<T>(&mut handle, &result.value, &result.file_resolution);
-}
-
-/// Dump the ConfigValue tree with provenance information to a writer.
-#[deprecated(note = "use dump_config_with_schema instead")]
-pub(crate) fn dump_config_with_provenance<T: Facet<'static>>(
-    w: &mut impl Write,
-    value: &ConfigValue,
-    file_resolution: &FileResolution,
-) {
-    // Extract context from shape
-    let ctx = DumpContext::from_shape::<T>();
-
-    dump_config_impl(w, value, file_resolution, &ctx, |w, value, ctx| {
-        write_config_values::<T>(w, value, ctx)
-    });
 }
 
 /// Dump the ConfigValue tree with provenance information to a writer, using Schema.
@@ -243,88 +179,6 @@ fn dump_config_impl(
         )
         .ok();
     }
-}
-
-/// Write just the config values (without the Sources header) to a writer, using Shape.
-/// Returns the DumpState for checking if truncation occurred.
-#[allow(dead_code)]
-fn write_config_values<T: Facet<'static>>(
-    w: &mut dyn Write,
-    value: &ConfigValue,
-    ctx: &DumpContext,
-) -> DumpState {
-    // Step 1: Coerce string values to their target types (for env vars)
-    let coerced_value = coerce_types_from_shape(value, T::SHAPE);
-
-    // Step 2: Collect all lines by walking the shape
-    let mut lines = Vec::new();
-    let mut state = DumpState::new();
-    if let ConfigValue::Object(sourced) = &coerced_value
-        && let facet_core::Type::User(facet_core::UserType::Struct(s)) = &T::SHAPE.ty
-    {
-        for field in s.fields {
-            let key = field.name;
-            let is_sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
-            let field_shape = field.shape.get();
-
-            if let Some(val) = sourced.value.get(key) {
-                collect_dump_lines(
-                    val,
-                    key,
-                    0,
-                    field_shape,
-                    is_sensitive,
-                    &mut lines,
-                    ctx,
-                    &mut state,
-                );
-            } else {
-                // Field is missing from ConfigValue - check if it has a default
-                let has_default = field.default.is_some();
-                let is_option = field_shape.type_identifier.contains("Option");
-
-                if has_default || is_option {
-                    // Field has a default or is Option - show as <default>
-                    let colored_value = "<default>".bright_black().to_string();
-                    lines.push(DumpLine {
-                        indent: 0,
-                        key: key.to_string(),
-                        value: colored_value,
-                        provenance: "DEFAULT".bright_black().to_string(),
-                        is_header: false,
-                    });
-                } else {
-                    // Required field without default - show MISSING marker
-                    let colored_value = format!("❌ MISSING <{}>", field_shape.type_identifier)
-                        .red()
-                        .bold()
-                        .to_string();
-                    lines.push(DumpLine {
-                        indent: 0,
-                        key: key.to_string(),
-                        value: colored_value,
-                        provenance: String::new(),
-                        is_header: false,
-                    });
-
-                    // Show doc comment as help text if available
-                    if !field.doc.is_empty() {
-                        let help_text = format!("  {}", field.doc.join(" ")).dimmed().to_string();
-                        lines.push(DumpLine {
-                            indent: 0,
-                            key: String::new(),
-                            value: help_text,
-                            provenance: String::new(),
-                            is_header: false,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    write_lines(w, &lines, ctx);
-    state
 }
 
 /// Write collected lines to a writer with proper formatting.
@@ -453,6 +307,18 @@ fn write_config_values_with_schema(
                         provenance: String::new(),
                         is_header: false,
                     });
+
+                    // Show doc comment as help text if available
+                    if let Some(summary) = arg_schema.docs().summary() {
+                        let help_text = format!("  {}", summary).dimmed().to_string();
+                        lines.push(DumpLine {
+                            indent: 0,
+                            key: String::new(),
+                            value: help_text,
+                            provenance: String::new(),
+                            is_header: false,
+                        });
+                    }
                 } else {
                     // Optional field - show as <default>
                     let colored_value = "<default>".bright_black().to_string();
@@ -554,6 +420,7 @@ fn collect_dump_lines_for_config_field(
         name,
         indent,
         field_schema.value(),
+        field_schema.is_sensitive(),
         lines,
         ctx,
         state,
@@ -561,11 +428,13 @@ fn collect_dump_lines_for_config_field(
 }
 
 /// Collect dump lines for a config value schema.
+#[allow(clippy::too_many_arguments)]
 fn collect_dump_lines_for_config_value(
     value: &ConfigValue,
     name: &str,
     indent: usize,
     value_schema: &ConfigValueSchema,
+    is_sensitive: bool,
     lines: &mut Vec<DumpLine>,
     ctx: &DumpContext,
     state: &mut DumpState,
@@ -621,6 +490,18 @@ fn collect_dump_lines_for_config_value(
                             provenance: String::new(),
                             is_header: false,
                         });
+
+                        // Show doc comment as help text if available
+                        if let Some(summary) = field_schema.docs().summary() {
+                            let help_text = format!("  {}", summary).dimmed().to_string();
+                            lines.push(DumpLine {
+                                indent: indent + 1,
+                                key: String::new(),
+                                value: help_text,
+                                provenance: String::new(),
+                                is_header: false,
+                            });
+                        }
                     }
                 }
             }
@@ -641,6 +522,7 @@ fn collect_dump_lines_for_config_value(
                     &format!("[{}]", i),
                     indent + 1,
                     vec_schema.element(),
+                    is_sensitive, // Propagate sensitivity through arrays
                     lines,
                     ctx,
                     state,
@@ -660,14 +542,15 @@ fn collect_dump_lines_for_config_value(
                 name,
                 indent,
                 inner_schema,
+                is_sensitive,
                 lines,
                 ctx,
                 state,
             );
         }
-        // Leaf values - use simple dump
+        // Leaf values - use simple dump with sensitivity
         _ => {
-            collect_dump_lines_simple(value, name, indent, false, lines, ctx, state);
+            collect_dump_lines_simple(value, name, indent, is_sensitive, lines, ctx, state);
         }
     }
 }
@@ -675,12 +558,12 @@ fn collect_dump_lines_for_config_value(
 /// Get a human-readable type name from a ConfigValueSchema.
 fn get_config_value_type_name(schema: &ConfigValueSchema) -> String {
     match schema {
-        ConfigValueSchema::Struct(_) => "Struct".to_string(),
-        ConfigValueSchema::Vec(_) => "Vec".to_string(),
+        ConfigValueSchema::Struct(s) => s.shape().to_string(),
+        ConfigValueSchema::Vec(v) => v.shape().to_string(),
         ConfigValueSchema::Option { value, .. } => {
             format!("Option<{}>", get_config_value_type_name(value))
         }
-        ConfigValueSchema::Leaf(leaf) => format!("{:?}", leaf),
+        ConfigValueSchema::Leaf(leaf) => leaf.shape.to_string(),
     }
 }
 
@@ -812,211 +695,6 @@ fn collect_dump_lines_simple(
 
             for (key, val) in sourced.value.fields.iter() {
                 collect_dump_lines_simple(val, key, indent + 1, false, lines, ctx, state);
-            }
-        }
-    }
-}
-
-/// Recursively collect lines to be printed.
-#[allow(clippy::too_many_arguments)]
-fn collect_dump_lines(
-    value: &ConfigValue,
-    path: &str,
-    indent: usize,
-    shape: &'static facet_core::Shape,
-    is_sensitive: bool,
-    lines: &mut Vec<DumpLine>,
-    ctx: &DumpContext,
-    state: &mut DumpState,
-) {
-    match value {
-        ConfigValue::Object(sourced) => {
-            // Add header line for this object
-            if !path.is_empty() {
-                lines.push(DumpLine {
-                    indent,
-                    key: path.to_string(),
-                    value: String::new(),
-                    provenance: String::new(),
-                    is_header: true,
-                });
-            }
-
-            // Iterate in struct field order
-            if let facet_core::Type::User(facet_core::UserType::Struct(s)) = &shape.ty {
-                for field in s.fields {
-                    let key = field.name;
-                    let is_sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
-                    let field_shape = field.shape.get();
-
-                    if let Some(val) = sourced.value.get(key) {
-                        collect_dump_lines(
-                            val,
-                            key,
-                            indent + 1,
-                            field_shape,
-                            is_sensitive,
-                            lines,
-                            ctx,
-                            state,
-                        );
-                    } else {
-                        // Field is missing from ConfigValue - check if it has a default
-                        let has_default = field.default.is_some();
-                        let is_option = field_shape.type_identifier.contains("Option");
-
-                        if has_default || is_option {
-                            // Field has a default or is Option - show as <default>
-                            let colored_value = "<default>".bright_black().to_string();
-                            lines.push(DumpLine {
-                                indent: indent + 1,
-                                key: key.to_string(),
-                                value: colored_value,
-                                provenance: "DEFAULT".bright_black().to_string(),
-                                is_header: false,
-                            });
-                        } else {
-                            // Required field without default - show MISSING marker
-                            let colored_value =
-                                format!("❌ MISSING <{}>", field_shape.type_identifier)
-                                    .red()
-                                    .bold()
-                                    .to_string();
-                            lines.push(DumpLine {
-                                indent: indent + 1,
-                                key: key.to_string(),
-                                value: colored_value,
-                                provenance: String::new(),
-                                is_header: false,
-                            });
-
-                            // Show doc comment as help text if available
-                            if !field.doc.is_empty() {
-                                let help_text =
-                                    format!("  {}", field.doc.join(" ")).dimmed().to_string();
-                                lines.push(DumpLine {
-                                    indent: indent + 1,
-                                    key: String::new(),
-                                    value: help_text,
-                                    provenance: String::new(),
-                                    is_header: false,
-                                });
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Fallback: iterate in insertion order
-                for (key, val) in sourced.value.iter() {
-                    collect_dump_lines(val, key, indent + 1, shape, false, lines, ctx, state);
-                }
-            }
-        }
-        ConfigValue::Array(sourced) => {
-            // Add header for array
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: String::new(),
-                provenance: String::new(),
-                is_header: true,
-            });
-
-            for (i, item) in sourced.value.iter().enumerate() {
-                let element_shape = shape.inner.unwrap_or(shape);
-                collect_dump_lines(
-                    item,
-                    &format!("[{}]", i),
-                    indent + 1,
-                    element_shape,
-                    false,
-                    lines,
-                    ctx,
-                    state,
-                );
-            }
-        }
-        ConfigValue::String(sourced) => {
-            let colored_value = if is_sensitive {
-                let len = sourced.value.len();
-                format!("🔒 [REDACTED ({} bytes)]", len)
-                    .bright_magenta()
-                    .to_string()
-            } else {
-                // Replace newlines with visual indicator
-                let escaped = sourced.value.replace('\n', "↵");
-                let (truncated, was_truncated) = truncate_middle(&escaped, ctx.max_string_length);
-                if was_truncated {
-                    state.had_truncation = true;
-                }
-                format!("\"{}\"", truncated).green().to_string()
-            };
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: colored_value,
-                provenance: format_provenance(&sourced.provenance),
-                is_header: false,
-            });
-        }
-        ConfigValue::Integer(sourced) => {
-            let colored_value = sourced.value.to_string().blue().to_string();
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: colored_value,
-                provenance: format_provenance(&sourced.provenance),
-                is_header: false,
-            });
-        }
-        ConfigValue::Float(sourced) => {
-            let colored_value = sourced.value.to_string().bright_blue().to_string();
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: colored_value,
-                provenance: format_provenance(&sourced.provenance),
-                is_header: false,
-            });
-        }
-        ConfigValue::Bool(sourced) => {
-            let colored_value = if sourced.value {
-                sourced.value.to_string().green().to_string()
-            } else {
-                sourced.value.to_string().red().to_string()
-            };
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: colored_value,
-                provenance: format_provenance(&sourced.provenance),
-                is_header: false,
-            });
-        }
-        ConfigValue::Null(sourced) => {
-            let colored_value = "null".bright_black().to_string();
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: colored_value,
-                provenance: format_provenance(&sourced.provenance),
-                is_header: false,
-            });
-        }
-        ConfigValue::Enum(sourced) => {
-            // Add header line showing variant name
-            let variant_display = format!("{}::", sourced.value.variant).cyan().to_string();
-            lines.push(DumpLine {
-                indent,
-                key: path.to_string(),
-                value: variant_display,
-                provenance: format_provenance(&sourced.provenance),
-                is_header: true,
-            });
-
-            // Dump the enum's fields
-            for (key, val) in sourced.value.fields.iter() {
-                collect_dump_lines(val, key, indent + 1, shape, false, lines, ctx, state);
             }
         }
     }

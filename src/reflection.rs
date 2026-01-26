@@ -1,7 +1,4 @@
-use crate::{
-    Attr,
-    config_value::{ConfigValue, Sourced},
-};
+use crate::config_value::{ConfigValue, Sourced};
 
 /// Check if a field is marked with `args::counted`.
 #[deprecated(note = "move to schema/from_schema.rs")]
@@ -23,32 +20,6 @@ pub(crate) const fn is_supported_counted_type(shape: &'static facet_core::Shape)
 #[deprecated(note = "move to schema/from_schema.rs")]
 pub(crate) fn is_config_field(field: &facet_core::Field) -> bool {
     field.has_attr(Some("args"), "config")
-}
-
-/// Find the config field in a struct shape, if any.
-#[deprecated(note = "move to schema/from_schema.rs")]
-pub(crate) fn find_config_field(
-    shape: &'static facet_core::Shape,
-) -> Option<&'static facet_core::Field> {
-    use facet_core::{Type, UserType};
-
-    match &shape.ty {
-        Type::User(UserType::Struct(s)) => s.fields.iter().find(|field| is_config_field(field)),
-        _ => None,
-    }
-}
-
-/// Get the env_prefix value from a field's attributes.
-#[deprecated(note = "move to schema/from_schema.rs")]
-pub(crate) fn get_env_prefix(field: &facet_core::Field) -> Option<&'static str> {
-    let attr = field.get_attr(Some("args"), "env_prefix")?;
-    let parsed = attr.get_as::<crate::Attr>()?;
-
-    if let Attr::EnvPrefix(prefix_opt) = parsed {
-        *prefix_opt
-    } else {
-        None
-    }
 }
 
 /// Coerce ConfigValue types based on the target shape.

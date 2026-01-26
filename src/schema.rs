@@ -303,6 +303,9 @@ pub struct ConfigFieldSchema {
     /// Doc comments for a field
     docs: Docs,
 
+    /// Whether this field contains sensitive data (passwords, tokens, etc.)
+    sensitive: bool,
+
     /// Value schema for a field
     pub value: ConfigValueSchema,
 }
@@ -601,6 +604,11 @@ impl ConfigStructSchema {
     pub fn fields(&self) -> &IndexMap<String, ConfigFieldSchema, RandomState> {
         &self.fields
     }
+
+    /// Get the shape of this config struct.
+    pub fn shape(&self) -> &'static Shape {
+        self.shape
+    }
 }
 
 impl ConfigFieldSchema {
@@ -608,12 +616,27 @@ impl ConfigFieldSchema {
     pub fn value(&self) -> &ConfigValueSchema {
         &self.value
     }
+
+    /// Get the documentation for this field.
+    pub fn docs(&self) -> &Docs {
+        &self.docs
+    }
+
+    /// Check if this field contains sensitive data.
+    pub fn is_sensitive(&self) -> bool {
+        self.sensitive
+    }
 }
 
 impl ConfigVecSchema {
     /// Get the element schema for this vec.
     pub fn element(&self) -> &ConfigValueSchema {
         &self.element
+    }
+
+    /// Get the shape of this vec.
+    pub fn shape(&self) -> &'static Shape {
+        self.shape
     }
 }
 

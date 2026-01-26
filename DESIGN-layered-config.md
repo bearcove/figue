@@ -71,14 +71,14 @@ This section tracks what has been implemented and what remains TODO.
   - Automatically calls `from_config_value()` to convert merged result to target type
   - `restructure_config_value()` wraps config-related fields under config field
 
-- **Config dump with `--dump-config`** (`src/lib.rs`)
-  - `dump_config_with_provenance()` pretty-prints resolved config
+- **Config dump with `--dump-config`** (`src/dump.rs`)
+  - `dump_config_with_schema()` pretty-prints resolved config using Schema
   - Colored output with visual hierarchy (keys, values, provenance sources)
   - Dot-padding for alignment between columns
   - Field order preserved from struct definition (not insertion order)
   - Sensitive fields automatically redacted as `🔒 [REDACTED (N bytes)]`
-  - Dynamic extraction of env prefix and config field name from Shape
-  - Type coercion for env vars (strings converted to int/bool/float based on target type)
+  - Dynamic extraction of env prefix and config field name from Schema
+  - Proper handling of flattened fields via Schema
   - String value features:
     - Middle truncation for long strings (default 50 chars)
     - Multi-line wrapping within value column (max 50 chars wide)

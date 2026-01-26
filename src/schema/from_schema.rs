@@ -320,12 +320,20 @@ fn config_struct_schema_from_shape_with_prefix(
 
         // Non-flattened field
         let docs = docs_from_lines(field.doc);
+        let sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
         let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
         // Use the effective (serialized) name as the key
         let effective_name = field.effective_name().to_string();
 
-        fields_map.insert(effective_name, ConfigFieldSchema { docs, value });
+        fields_map.insert(
+            effective_name,
+            ConfigFieldSchema {
+                docs,
+                sensitive,
+                value,
+            },
+        );
     }
 
     Ok(ConfigStructSchema {
