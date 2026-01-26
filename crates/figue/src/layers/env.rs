@@ -292,7 +292,7 @@ fn check_env_aliases(
         field_path.push(field_name.clone());
 
         // Check if this field has aliases and wasn't already set by a prefixed var
-        let already_set = prefixed_paths.iter().any(|p| *p == field_path);
+        let already_set = prefixed_paths.contains(&field_path);
         if !already_set {
             for alias in field_schema.env_aliases() {
                 if let Some(value) = source.get(alias) {
@@ -402,7 +402,6 @@ fn validate_enum_value_if_applicable(
     }
 }
 
-
 /// Parse a comma-separated string, handling escaping.
 fn parse_comma_separated(input: &str) -> Vec<String> {
     let mut result = Vec::new();
@@ -443,7 +442,6 @@ fn parse_comma_separated(input: &str) -> Vec<String> {
 
     result
 }
-
 
 #[cfg(test)]
 mod tests {

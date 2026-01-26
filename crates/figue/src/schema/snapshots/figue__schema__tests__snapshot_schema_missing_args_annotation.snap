@@ -1,5 +1,5 @@
 ---
-source: src/schema/tests.rs
+source: crates/figue/src/schema/tests.rs
 expression: stripped
 ---
 Error: field `foo` is missing a #[facet(args::...)] annotation
@@ -7,7 +7,7 @@ Error: field `foo` is missing a #[facet(args::...)] annotation
    │
  2 │ struct MissingArgsAnnotation {
    │        ──────────┬──────────  
-   │                  ╰──────────── defined at src/schema/tests.rs:65
+   │                  ╰──────────── defined at crates/figue/src/schema/tests.rs:65
  3 │     foo: String,
    │     ─────┬─────  
    │          ╰─────── field `foo` is missing a #[facet(args::...)] annotation
