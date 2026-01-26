@@ -27,6 +27,7 @@ use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
 use crate::config_value_parser::{fill_defaults_from_schema, from_config_value};
 use crate::dump::dump_config_with_schema;
+use crate::enum_conflicts::detect_enum_conflicts;
 use crate::env_subst::{EnvSubstError, RealEnv, substitute_env_vars};
 use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
@@ -274,6 +275,30 @@ impl<T: Facet<'static>> Driver<T> {
             return DriverOutcome::err(DriverError::EnvSubst { error: e });
         }
         tracing::debug!(merged_value = ?merged_value, "driver: after env_subst");
+
+        // Phase 2.75: Check for conflicting enum variants
+        // E.g., setting both storage.s3.bucket and storage.gcp.project when storage is an enum
+        let enum_conflicts = detect_enum_conflicts(&merged_value, &self.config.schema);
+        if !enum_conflicts.is_empty() {
+            let messages: Vec<String> = enum_conflicts.iter().map(|c| c.format()).collect();
+            let message = messages.join("\n\n");
+
+            return DriverOutcome::err(DriverError::Failed {
+                report: Box::new(DriverReport {
+                    diagnostics: vec![Diagnostic {
+                        message,
+                        path: None,
+                        span: None,
+                        severity: Severity::Error,
+                    }],
+                    layers,
+                    file_resolution,
+                    overrides,
+                    cli_args_source,
+                    source_name: "<cli>".to_string(),
+                }),
+            });
+        }
 
         // Phase 3: Fill defaults and check for missing required fields
         // This must happen BEFORE deserialization so we can show all missing fields at once
@@ -1796,6 +1821,230 @@ mod tests {
                 }
             },
             Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    // ========================================================================
+    // Enum variant conflict tests
+    // ========================================================================
+
+    #[derive(Facet, Debug)]
+    #[facet(rename_all = "kebab-case")]
+    #[repr(u8)]
+    #[allow(dead_code)]
+    enum StorageBackend {
+        S3 { bucket: String, region: String },
+        Gcp { project: String, zone: String },
+        Local { path: String },
+    }
+
+    #[derive(Facet, Debug)]
+    struct StorageConfig {
+        storage: StorageBackend,
+    }
+
+    #[derive(Facet, Debug)]
+    struct ArgsWithStorageConfig {
+        #[facet(figue::config)]
+        config: StorageConfig,
+    }
+
+    #[test]
+    #[ignore = "env parser doesn't support enum variant paths yet (issue #37)"]
+    fn test_enum_variant_conflict_from_env() {
+        use crate::layers::env::MockEnv;
+
+        // Set both s3 and gcp variants via env vars - should error
+        let config = builder::<ArgsWithStorageConfig>()
+            .expect("failed to build schema")
+            .env(|env| {
+                env.prefix("MYAPP").source(MockEnv::from_pairs([
+                    ("MYAPP__STORAGE__S3__BUCKET", "my-bucket"),
+                    ("MYAPP__STORAGE__S3__REGION", "us-east-1"),
+                    ("MYAPP__STORAGE__GCP__PROJECT", "my-project"),
+                ]))
+            })
+            .build();
+
+        let result = Driver::new(config).run().into_result();
+        match result {
+            Err(DriverError::Failed { report }) => {
+                let msg = format!("{}", report);
+                assert!(
+                    msg.contains("Conflicting enum variants"),
+                    "should report enum conflict: {msg}"
+                );
+                assert!(msg.contains("s3"), "should mention s3 variant: {msg}");
+                assert!(msg.contains("gcp"), "should mention gcp variant: {msg}");
+            }
+            Ok(_) => panic!("expected conflict error, got success"),
+            Err(e) => panic!("expected conflict error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    #[ignore = "env parser doesn't support enum variant paths yet (issue #37)"]
+    fn test_enum_no_conflict_single_variant_from_env() {
+        use crate::layers::env::MockEnv;
+
+        // Set only s3 variant via env vars - should succeed
+        let config = builder::<ArgsWithStorageConfig>()
+            .expect("failed to build schema")
+            .env(|env| {
+                env.prefix("MYAPP").source(MockEnv::from_pairs([
+                    ("MYAPP__STORAGE__S3__BUCKET", "my-bucket"),
+                    ("MYAPP__STORAGE__S3__REGION", "us-east-1"),
+                ]))
+            })
+            .build();
+
+        let result = Driver::new(config).run().into_result();
+        match result {
+            Ok(output) => {
+                match &output.value.config.storage {
+                    StorageBackend::S3 { bucket, region } => {
+                        assert_eq!(bucket, "my-bucket");
+                        assert_eq!(region, "us-east-1");
+                    }
+                    other => panic!("expected S3 variant, got {:?}", other),
+                }
+            }
+            Err(e) => panic!("expected success, got {:?}", e),
+        }
+    }
+
+    #[test]
+    #[ignore = "env parser doesn't support enum variant paths yet (issue #37)"]
+    fn test_enum_variant_conflict_cross_source() {
+        use crate::layers::env::MockEnv;
+
+        // Set s3 from env, gcp from CLI - should error
+        let config = builder::<ArgsWithStorageConfig>()
+            .expect("failed to build schema")
+            .env(|env| {
+                env.prefix("MYAPP").source(MockEnv::from_pairs([
+                    ("MYAPP__STORAGE__S3__BUCKET", "my-bucket"),
+                    ("MYAPP__STORAGE__S3__REGION", "us-east-1"),
+                ]))
+            })
+            .cli(|cli| {
+                cli.args([
+                    "--config.storage.gcp.project",
+                    "my-project",
+                    "--config.storage.gcp.zone",
+                    "us-central1-a",
+                ])
+            })
+            .build();
+
+        let result = Driver::new(config).run().into_result();
+        match result {
+            Err(DriverError::Failed { report }) => {
+                let msg = format!("{}", report);
+                assert!(
+                    msg.contains("Conflicting enum variants"),
+                    "should report enum conflict: {msg}"
+                );
+                // Should mention both variants
+                assert!(msg.contains("s3"), "should mention s3: {msg}");
+                assert!(msg.contains("gcp"), "should mention gcp: {msg}");
+            }
+            Ok(_) => panic!("expected conflict error, got success"),
+            Err(e) => panic!("expected conflict error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_enum_variant_conflict_from_cli() {
+        // Set both s3 and gcp variants via CLI args - should error
+        let config = builder::<ArgsWithStorageConfig>()
+            .expect("failed to build schema")
+            .cli(|cli| {
+                cli.args([
+                    "--config.storage.s3.bucket",
+                    "my-bucket",
+                    "--config.storage.gcp.project",
+                    "my-project",
+                ])
+            })
+            .build();
+
+        let result = Driver::new(config).run().into_result();
+        match result {
+            Err(DriverError::Failed { report }) => {
+                let msg = format!("{}", report);
+                assert!(
+                    msg.contains("Conflicting enum variants"),
+                    "should report enum conflict: {msg}"
+                );
+            }
+            Ok(_) => panic!("expected conflict error, got success"),
+            Err(e) => panic!("expected conflict error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_enum_no_conflict_single_variant_from_cli() {
+        // Set only s3 variant via CLI args - should succeed
+        let config = builder::<ArgsWithStorageConfig>()
+            .expect("failed to build schema")
+            .cli(|cli| {
+                cli.args([
+                    "--config.storage.s3.bucket",
+                    "my-bucket",
+                    "--config.storage.s3.region",
+                    "us-east-1",
+                ])
+            })
+            .build();
+
+        let result = Driver::new(config).run().into_result();
+        match result {
+            Ok(output) => {
+                match &output.value.config.storage {
+                    StorageBackend::S3 { bucket, region } => {
+                        assert_eq!(bucket, "my-bucket");
+                        assert_eq!(region, "us-east-1");
+                    }
+                    other => panic!("expected S3 variant, got {:?}", other),
+                }
+            }
+            Err(e) => panic!("expected success, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_enum_variant_conflict_three_variants() {
+        // Set all three variants via CLI args - should error
+        let config = builder::<ArgsWithStorageConfig>()
+            .expect("failed to build schema")
+            .cli(|cli| {
+                cli.args([
+                    "--config.storage.s3.bucket",
+                    "my-bucket",
+                    "--config.storage.gcp.project",
+                    "my-project",
+                    "--config.storage.local.path",
+                    "/data",
+                ])
+            })
+            .build();
+
+        let result = Driver::new(config).run().into_result();
+        match result {
+            Err(DriverError::Failed { report }) => {
+                let msg = format!("{}", report);
+                assert!(
+                    msg.contains("Conflicting enum variants"),
+                    "should report enum conflict: {msg}"
+                );
+                // Should mention all three variants
+                assert!(msg.contains("s3"), "should mention s3: {msg}");
+                assert!(msg.contains("gcp"), "should mention gcp: {msg}");
+                assert!(msg.contains("local"), "should mention local: {msg}");
+            }
+            Ok(_) => panic!("expected conflict error, got success"),
+            Err(e) => panic!("expected conflict error, got {:?}", e),
         }
     }
 }

@@ -24,6 +24,7 @@ pub(crate) mod config_value_parser;
 pub(crate) mod diagnostics;
 pub(crate) mod driver;
 pub(crate) mod dump;
+pub(crate) mod enum_conflicts;
 pub(crate) mod env_subst;
 pub(crate) mod error;
 pub(crate) mod help;
