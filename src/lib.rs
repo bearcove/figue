@@ -86,7 +86,9 @@ pub fn from_slice<T: Facet<'static>>(args: &[&str]) -> driver::DriverOutcome<T> 
     use crate::driver::{Driver, DriverError, DriverOutcome};
 
     let config = match builder::<T>() {
-        Ok(b) => b.cli(|cli| cli.args(args.iter().map(|s| s.to_string()))).build(),
+        Ok(b) => b
+            .cli(|cli| cli.args(args.iter().map(|s| s.to_string())))
+            .build(),
         Err(e) => return DriverOutcome::err(DriverError::Builder { error: e }),
     };
 
@@ -118,6 +120,30 @@ pub fn from_slice<T: Facet<'static>>(args: &[&str]) -> driver::DriverOutcome<T> 
 /// - `--help` / `-h`: Shows help and exits with code 0
 /// - `--version` / `-V`: Shows version and exits with code 0
 /// - `--completions <SHELL>`: Generates shell completions and exits with code 0
+///
+/// # Setting the Version
+///
+/// By default, `--version` displays "unknown" because figue cannot automatically
+/// capture your crate's version at compile time. To display your crate's version,
+/// configure it via the builder:
+///
+/// ```rust,ignore
+/// fn main() {
+///     let args = figue::builder::<Args>()
+///         .unwrap()
+///         .cli(|cli| cli.args(std::env::args().skip(1)))
+///         .help(|h| h
+///             .program_name(env!("CARGO_PKG_NAME"))
+///             .version(env!("CARGO_PKG_VERSION")))
+///         .build();
+///
+///     let args = figue::Driver::new(args).run().unwrap();
+///     // use args...
+/// }
+/// ```
+///
+/// The `env!("CARGO_PKG_VERSION")` macro is evaluated at *your* crate's compile time,
+/// capturing the correct version from your `Cargo.toml`.
 #[derive(facet::Facet, Default, Debug)]
 pub struct FigueBuiltins {
     /// Show help message and exit.
@@ -279,4 +305,3 @@ mod tests {
         );
     }
 }
-

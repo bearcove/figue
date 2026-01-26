@@ -355,7 +355,15 @@ impl HelpConfigBuilder {
         self
     }
 
-    /// Set the program version shown in help.
+    /// Set the program version shown by `--version`.
+    ///
+    /// Use `env!("CARGO_PKG_VERSION")` to capture your crate's version:
+    ///
+    /// ```rust,ignore
+    /// .help(|h| h.version(env!("CARGO_PKG_VERSION")))
+    /// ```
+    ///
+    /// If not set, `--version` will display "unknown".
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.config.version = Some(version.into());
         self
