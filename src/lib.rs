@@ -46,10 +46,14 @@ use facet_core::Facet;
 
 pub use builder::builder;
 pub use completions::{Shell, generate_completions, generate_completions_for_shape};
+#[cfg(feature = "styx")]
+pub use config_format::StyxFormat;
+pub use config_format::{ConfigFormat, ConfigFormatError, JsonFormat};
 pub use driver::{Driver, DriverError, DriverOutcome, DriverOutput, DriverReport};
 pub use error::{ArgsErrorKind, ArgsErrorWithInput};
 pub use help::{HelpConfig, generate_help, generate_help_for_shape};
 pub use layers::env::MockEnv;
+pub use layers::file::FormatRegistry;
 
 /// Parse command-line arguments from `std::env::args()`.
 ///

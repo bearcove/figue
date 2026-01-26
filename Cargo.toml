@@ -28,6 +28,7 @@ facet = { git = "https://github.com/facet-rs/facet", branch = "main", version = 
 facet-core = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }
 facet-format = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }
 facet-json = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }
+facet-styx = { git = "https://github.com/bearcove/styx", branch = "main", version = "1.0", optional = true }
 facet-reflect = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }
 facet-pretty = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }
 facet-error = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }
@@ -63,6 +64,7 @@ default = ["rich-diagnostics"]
 rich-diagnostics = []
 doc = ["facet/doc"]
 tracing = ["facet-reflect/tracing", "facet-json/tracing", "facet-format/tracing"]
+styx = ["dep:facet-styx"]
 
 [[example]]
 name = "args_showcase"

@@ -72,21 +72,13 @@ pub fn detect_enum_conflicts(value: &ConfigValue, schema: &Schema) -> Vec<EnumCo
     let mut conflicts = Vec::new();
 
     // Check config struct if present
-    if let Some(config_schema) = schema.config() {
-        if let Some(field_name) = config_schema.field_name() {
-            // Get the config value from the root object
-            if let ConfigValue::Object(sourced) = value {
-                if let Some(config_value) = sourced.value.get(field_name) {
-                    let mut path = vec![field_name.to_string()];
-                    check_struct_for_conflicts(
-                        config_value,
-                        config_schema,
-                        &mut path,
-                        &mut conflicts,
-                    );
-                }
-            }
-        }
+    if let Some(config_schema) = schema.config()
+        && let Some(field_name) = config_schema.field_name()
+        && let ConfigValue::Object(sourced) = value
+        && let Some(config_value) = sourced.value.get(field_name)
+    {
+        let mut path = vec![field_name.to_string()];
+        check_struct_for_conflicts(config_value, config_schema, &mut path, &mut conflicts);
     }
 
     conflicts
@@ -386,7 +378,10 @@ mod tests {
         let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
         let conflicts = detect_enum_conflicts(&value, &schema);
 
-        assert!(conflicts.is_empty(), "should have no conflicts: {conflicts:?}");
+        assert!(
+            conflicts.is_empty(),
+            "should have no conflicts: {conflicts:?}"
+        );
     }
 
     #[test]
@@ -457,7 +452,8 @@ mod tests {
 
         // Should mention provenance sources
         assert!(
-            msg.contains("MYAPP__STORAGE__S3__BUCKET") || msg.contains("--config.storage.gcp.project"),
+            msg.contains("MYAPP__STORAGE__S3__BUCKET")
+                || msg.contains("--config.storage.gcp.project"),
             "error should mention provenance: {msg}"
         );
     }
@@ -527,7 +523,11 @@ mod tests {
         let schema = Schema::from_shape(ArgsWithOptionalEnumConfig::SHAPE).unwrap();
         let conflicts = detect_enum_conflicts(&value, &schema);
 
-        assert_eq!(conflicts.len(), 1, "optional enum should also detect conflicts");
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "optional enum should also detect conflicts"
+        );
     }
 
     #[derive(Facet)]
