@@ -180,7 +180,11 @@ impl<T: Facet<'static>> Driver<T> {
                     Vec::new()
                 };
 
-                let text = generate_help_for_subcommand(T::SHAPE, &subcommand_path, &help_config);
+                let text = generate_help_for_subcommand(
+                    &self.config.schema,
+                    &subcommand_path,
+                    &help_config,
+                );
                 return Err(DriverError::Help { text });
             }
 
@@ -282,7 +286,7 @@ impl<T: Facet<'static>> Driver<T> {
                     .cloned()
                     .unwrap_or_default();
 
-                let help = generate_help_for_subcommand(T::SHAPE, &[], &help_config);
+                let help = generate_help_for_subcommand(&self.config.schema, &[], &help_config);
                 return Err(DriverError::Help { text: help });
             }
 

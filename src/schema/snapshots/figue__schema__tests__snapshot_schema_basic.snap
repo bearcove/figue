@@ -3,6 +3,7 @@ source: src/schema/tests.rs
 expression: "facet_json :: to_string_pretty(& value).unwrap()"
 ---
 {
+  "docs": {},
   "args": {
     "args": {
       "verbose": {
@@ -82,9 +83,9 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
       }
     },
     "subcommands": {
-      "Build": {
-        "name": "Build",
-        "variant_name": "Build",
+      "build": {
+        "name": "build",
+        "effective_name": "Build",
         "docs": {
           "summary": "Build stuff"
         },
@@ -115,7 +116,7 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
       },
       "clean-all": {
         "name": "clean-all",
-        "variant_name": "Clean",
+        "effective_name": "clean-all",
         "docs": {
           "summary": "Clean"
         },
@@ -125,7 +126,8 @@ expression: "facet_json :: to_string_pretty(& value).unwrap()"
         }
       }
     },
-    "subcommand_field_name": "command"
+    "subcommand_field_name": "command",
+    "subcommand_optional": true
   },
   "config": {
     "field_name": "config",

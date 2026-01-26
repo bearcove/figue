@@ -1,4 +1,6 @@
 #![allow(unused_imports)]
+#![allow(unused_macros)]
+
 // Zero-cost tracing macros for figue
 //
 // These macros forward to tracing when the `tracing` feature is enabled,

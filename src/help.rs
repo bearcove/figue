@@ -1,15 +1,46 @@
 //! Help text generation for command-line interfaces.
 //!
-//! This module provides utilities to generate help text from Facet type metadata,
+//! This module provides utilities to generate help text from Schema,
 //! including doc comments, field names, and attribute information.
 
-use facet_core::{Def, Facet, Field, Shape, StructKind, Type, UserType, Variant};
-use heck::ToKebabCase;
+use facet_core::Facet;
 use owo_colors::OwoColorize;
 use std::string::String;
 use std::vec::Vec;
 
-use crate::reflection::{is_counted_field, is_supported_counted_type};
+use crate::schema::{ArgLevelSchema, ArgSchema, Schema, Subcommand};
+
+/// Generate help text for a Facet type.
+///
+/// This is a convenience function that builds a Schema internally.
+/// If you already have a Schema, use `generate_help_for_subcommand` instead.
+pub fn generate_help<T: Facet<'static>>(config: &HelpConfig) -> String {
+    generate_help_for_shape(T::SHAPE, config)
+}
+
+/// Generate help text from a Shape.
+///
+/// This is a convenience function that builds a Schema internally.
+/// If you already have a Schema, use `generate_help_for_subcommand` instead.
+pub fn generate_help_for_shape(shape: &'static facet_core::Shape, config: &HelpConfig) -> String {
+    let schema = match Schema::from_shape(shape) {
+        Ok(s) => s,
+        Err(_) => {
+            // Fall back to a minimal help message
+            let program_name = config
+                .program_name
+                .clone()
+                .or_else(|| std::env::args().next())
+                .unwrap_or_else(|| "program".to_string());
+            return format!(
+                "{}\n\n(Schema could not be built for this type)\n",
+                program_name
+            );
+        }
+    };
+
+    generate_help_for_subcommand(&schema, &[], config)
+}
 
 /// Configuration for help text generation.
 #[derive(Debug, Clone)]
@@ -35,214 +66,83 @@ impl Default for HelpConfig {
     }
 }
 
-/// Generate help text for a Facet type.
-pub fn generate_help<T: facet_core::Facet<'static>>(config: &HelpConfig) -> String {
-    generate_help_for_shape(T::SHAPE, config)
-}
-
-/// Generate help text for a specific subcommand path.
+/// Generate help text for a specific subcommand path from a Schema.
 ///
-/// `subcommand_path` is a list of variant names (e.g., `["Repo", "Clone"]` for `myapp repo clone --help`).
-/// This navigates through the type's shape to find the target subcommand and generates help for it.
+/// `subcommand_path` is a list of subcommand names (e.g., `["repo", "clone"]` for `myapp repo clone --help`).
+/// This navigates through the schema to find the target subcommand and generates help for it.
 pub fn generate_help_for_subcommand(
-    shape: &'static Shape,
+    schema: &Schema,
     subcommand_path: &[String],
     config: &HelpConfig,
 ) -> String {
-    if subcommand_path.is_empty() {
-        return generate_help_for_shape(shape, config);
-    }
-
-    // Navigate to the subcommand variant
-    if let Some(variant) = find_subcommand_variant(shape, subcommand_path) {
-        generate_help_for_variant(&variant, config)
-    } else {
-        // Fallback to root help if we can't find the subcommand
-        generate_help_for_shape(shape, config)
-    }
-}
-
-/// Generate help for a specific subcommand variant.
-fn generate_help_for_variant(variant: &FoundVariant, config: &HelpConfig) -> String {
-    let mut out = String::new();
-
-    // Program name
     let program_name = config
         .program_name
         .clone()
         .or_else(|| std::env::args().next())
         .unwrap_or_else(|| "program".to_string());
 
-    // Full command (e.g., "myapp repo clone")
-    let full_command = if variant.command_path.is_empty() {
-        program_name.clone()
-    } else {
-        format!("{} {}", program_name, variant.command_path.join(" "))
-    };
+    if subcommand_path.is_empty() {
+        return generate_help_from_schema(schema, &program_name, config);
+    }
 
-    // Header with full command
-    out.push_str(&format!("{full_command}\n"));
+    // Navigate to the subcommand
+    let mut current_args = schema.args();
+    let mut command_path = vec![program_name.clone()];
 
-    // Doc comment for the variant/subcommand
-    if !variant.doc.is_empty() {
-        out.push('\n');
-        for line in variant.doc {
-            out.push_str(line.trim());
-            out.push('\n');
+    for name in subcommand_path {
+        // The path contains effective names (e.g., "Clone", "rm") from ConfigValue.
+        // Look up by effective_name since that's what's stored in the path.
+        let sub = current_args
+            .subcommands()
+            .values()
+            .find(|s| s.effective_name() == name);
+
+        if let Some(sub) = sub {
+            command_path.push(sub.cli_name().to_string());
+            current_args = sub.args();
+        } else {
+            // Subcommand not found, fall back to root help
+            return generate_help_from_schema(schema, &program_name, config);
         }
     }
 
-    out.push('\n');
+    // Find the final subcommand to get its docs
+    let mut final_sub: Option<&Subcommand> = None;
+    let mut args = schema.args();
 
-    // Generate based on the variant's fields
-    // Collect flags, positionals, and nested subcommand from variant fields
-    let mut flags: Vec<&Field> = Vec::new();
-    let mut positionals: Vec<&Field> = Vec::new();
-    let mut subcommand: Option<&Field> = None;
-
-    collect_fields_recursive(
-        variant.fields,
-        &mut flags,
-        &mut positionals,
-        &mut subcommand,
-    );
-
-    generate_struct_help_inner(&mut out, &full_command, flags, positionals, subcommand);
-
-    out
-}
-
-/// Information about a found subcommand variant.
-struct FoundVariant {
-    /// The variant's fields (from data.fields)
-    fields: &'static [Field],
-    /// The variant's doc comment
-    doc: &'static [&'static str],
-    /// The command path for display (kebab-case)
-    command_path: Vec<String>,
-}
-
-/// Find a subcommand variant by navigating through the type hierarchy.
-/// Returns variant info for generating help.
-fn find_subcommand_variant(root_shape: &'static Shape, path: &[String]) -> Option<FoundVariant> {
-    if path.is_empty() {
-        return None;
+    for name in subcommand_path {
+        let sub = args
+            .subcommands()
+            .values()
+            .find(|s| s.effective_name() == name);
+        if let Some(sub) = sub {
+            final_sub = Some(sub);
+            args = sub.args();
+        }
     }
 
-    let mut current_fields: &'static [Field] = match &root_shape.ty {
-        Type::User(UserType::Struct(st)) => st.fields,
-        _ => return None,
-    };
-    let mut command_path = Vec::new();
-    let mut last_variant: Option<&'static Variant> = None;
-
-    for variant_name in path {
-        // Find the subcommand field in current fields
-        let subcommand_field = current_fields
-            .iter()
-            .find(|f| f.has_attr(Some("args"), "subcommand"));
-
-        let Some(field) = subcommand_field else {
-            // No subcommand field - check if we already have a variant with nested subcommand
-            if let Some(v) = last_variant {
-                // Check the variant's fields for a subcommand
-                let nested_sub = v
-                    .data
-                    .fields
-                    .iter()
-                    .find(|f| f.has_attr(Some("args"), "subcommand"));
-                if let Some(nested_field) = nested_sub {
-                    // Get the enum shape
-                    let enum_shape = match nested_field.shape().def {
-                        Def::Option(opt) => opt.t,
-                        _ => nested_field.shape(),
-                    };
-
-                    // Find the variant
-                    if let Type::User(UserType::Enum(e)) = &enum_shape.ty
-                        && let Some(v2) = e.variants.iter().find(|v| v.name == variant_name)
-                    {
-                        command_path.push(v2.name.to_kebab_case());
-                        last_variant = Some(v2);
-                        current_fields = v2.data.fields;
-                        continue;
-                    }
-                }
-            }
-            return None;
-        };
-
-        // Get the enum shape (handling Option<Enum>)
-        let enum_shape = match field.shape().def {
-            Def::Option(opt) => opt.t,
-            _ => field.shape(),
-        };
-
-        // Find the variant in the enum
-        // The variant_name comes from CLI (kebab-case or renamed), so we need to match
-        // using effective_name() which handles renames
-        let variant = match &enum_shape.ty {
-            Type::User(UserType::Enum(e)) => {
-                trace!(
-                    "enum has variants: {:?}, looking for {:?}",
-                    e.variants
-                        .iter()
-                        .map(|v| v.effective_name())
-                        .collect::<Vec<_>>(),
-                    variant_name
-                );
-                e.variants
-                    .iter()
-                    .find(|v| v.effective_name() == *variant_name)
-            }
-            _ => {
-                trace!("not an enum type");
-                None
-            }
-        };
-
-        trace!("found variant = {:?}", variant.map(|v| v.name));
-
-        let Some(v) = variant else {
-            debug!("variant {:?} not found, returning None", variant_name);
-            return None;
-        };
-
-        // Add to command path (kebab-case for display)
-        command_path.push(v.name.to_kebab_case());
-
-        // Update for next iteration
-        last_variant = Some(v);
-        current_fields = v.data.fields;
-    }
-
-    last_variant.map(|v| FoundVariant {
-        fields: v.data.fields,
-        doc: v.doc,
-        command_path,
-    })
+    generate_help_for_subcommand_level(current_args, final_sub, &command_path.join(" "), config)
 }
-/// Generate help text for a shape.
-pub fn generate_help_for_shape(shape: &'static Shape, config: &HelpConfig) -> String {
+
+/// Generate help from a built Schema.
+fn generate_help_from_schema(schema: &Schema, program_name: &str, config: &HelpConfig) -> String {
     let mut out = String::new();
 
     // Program name and version
-    let program_name = config
-        .program_name
-        .clone()
-        .or_else(|| std::env::args().next())
-        .unwrap_or_else(|| "program".to_string());
-
     if let Some(version) = &config.version {
         out.push_str(&format!("{program_name} {version}\n"));
     } else {
         out.push_str(&format!("{program_name}\n"));
     }
 
-    // Type doc comment
-    if !shape.doc.is_empty() {
+    // Type doc comment from schema
+    if let Some(summary) = schema.docs().summary() {
         out.push('\n');
-        for line in shape.doc {
+        out.push_str(summary.trim());
+        out.push('\n');
+    }
+    if let Some(details) = schema.docs().details() {
+        for line in details.lines() {
             out.push_str(line.trim());
             out.push('\n');
         }
@@ -257,69 +157,66 @@ pub fn generate_help_for_shape(shape: &'static Shape, config: &HelpConfig) -> St
 
     out.push('\n');
 
-    // Generate based on type
-    match &shape.ty {
-        Type::User(UserType::Struct(struct_type)) => {
-            generate_struct_help(&mut out, &program_name, struct_type.fields);
-        }
-        Type::User(UserType::Enum(enum_type)) => {
-            generate_enum_help(&mut out, &program_name, enum_type.variants);
-        }
-        _ => {
-            out.push_str("(No help available for this type)\n");
-        }
-    }
+    generate_arg_level_help(&mut out, schema.args(), program_name);
 
     out
 }
 
-fn generate_struct_help(out: &mut String, program_name: &str, fields: &'static [Field]) {
-    // Collect flags, positionals, and subcommand
-    let mut flags: Vec<&Field> = Vec::new();
-    let mut positionals: Vec<&Field> = Vec::new();
-    let mut subcommand: Option<&Field> = None;
+/// Generate help for a subcommand level.
+fn generate_help_for_subcommand_level(
+    args: &ArgLevelSchema,
+    subcommand: Option<&Subcommand>,
+    full_command: &str,
+    config: &HelpConfig,
+) -> String {
+    let mut out = String::new();
 
-    // Recursively collect fields, handling flatten
-    collect_fields_recursive(fields, &mut flags, &mut positionals, &mut subcommand);
+    // Header with full command
+    out.push_str(&format!("{full_command}\n"));
 
-    // Generate the help output
-    generate_struct_help_inner(out, program_name, flags, positionals, subcommand);
-}
-
-fn collect_fields_recursive<'a>(
-    fields: &'static [Field],
-    flags: &mut Vec<&'a Field>,
-    positionals: &mut Vec<&'a Field>,
-    subcommand: &mut Option<&'a Field>,
-) where
-    'static: 'a,
-{
-    for field in fields {
-        // Handle flattened fields - recurse into the inner struct
-        if field.is_flattened() {
-            if let Type::User(UserType::Struct(inner)) = &field.shape().ty {
-                collect_fields_recursive(inner.fields, flags, positionals, subcommand);
-            }
-            continue;
+    // Doc comment for the subcommand
+    if let Some(sub) = subcommand {
+        if let Some(summary) = sub.docs().summary() {
+            out.push('\n');
+            out.push_str(summary.trim());
+            out.push('\n');
         }
-
-        if field.has_attr(Some("args"), "subcommand") {
-            *subcommand = Some(field);
-        } else if field.has_attr(Some("args"), "positional") {
-            positionals.push(field);
-        } else {
-            flags.push(field);
+        if let Some(details) = sub.docs().details() {
+            for line in details.lines() {
+                out.push_str(line.trim());
+                out.push('\n');
+            }
         }
     }
+
+    // Additional description from config
+    if let Some(desc) = &config.description {
+        out.push('\n');
+        out.push_str(desc);
+        out.push('\n');
+    }
+
+    out.push('\n');
+
+    generate_arg_level_help(&mut out, args, full_command);
+
+    out
 }
 
-fn generate_struct_help_inner(
-    out: &mut String,
-    program_name: &str,
-    flags: Vec<&Field>,
-    positionals: Vec<&Field>,
-    subcommand: Option<&Field>,
-) {
+/// Generate help output for an argument level (args + subcommands).
+fn generate_arg_level_help(out: &mut String, args: &ArgLevelSchema, program_name: &str) {
+    // Separate positionals and named flags
+    let mut positionals: Vec<&ArgSchema> = Vec::new();
+    let mut flags: Vec<&ArgSchema> = Vec::new();
+
+    for (_name, arg) in args.args().iter() {
+        if arg.kind().is_positional() {
+            positionals.push(arg);
+        } else {
+            flags.push(arg);
+        }
+    }
+
     // Usage line
     out.push_str(&format!("{}:\n    ", "USAGE".yellow().bold()));
     out.push_str(program_name);
@@ -329,18 +226,16 @@ fn generate_struct_help_inner(
     }
 
     for pos in &positionals {
-        let name = pos.name.to_kebab_case().to_uppercase();
-        let is_optional = matches!(pos.shape().def, Def::Option(_)) || pos.has_default();
-        if is_optional {
-            out.push_str(&format!(" [{name}]"));
-        } else {
+        let name = pos.name().to_uppercase();
+        if pos.required() {
             out.push_str(&format!(" <{name}>"));
+        } else {
+            out.push_str(&format!(" [{name}]"));
         }
     }
 
-    if let Some(sub) = subcommand {
-        let is_optional = matches!(sub.shape().def, Def::Option(_));
-        if is_optional {
+    if args.has_subcommands() {
+        if args.subcommand_optional() {
             out.push_str(" [COMMAND]");
         } else {
             out.push_str(" <COMMAND>");
@@ -352,8 +247,8 @@ fn generate_struct_help_inner(
     // Positional arguments
     if !positionals.is_empty() {
         out.push_str(&format!("{}:\n", "ARGUMENTS".yellow().bold()));
-        for field in &positionals {
-            write_field_help(out, field, true);
+        for arg in &positionals {
+            write_arg_help(out, arg);
         }
         out.push('\n');
     }
@@ -361,79 +256,58 @@ fn generate_struct_help_inner(
     // Options
     if !flags.is_empty() {
         out.push_str(&format!("{}:\n", "OPTIONS".yellow().bold()));
-        for field in &flags {
-            write_field_help(out, field, false);
+        for arg in &flags {
+            write_arg_help(out, arg);
         }
         out.push('\n');
     }
 
     // Subcommands
-    if let Some(sub_field) = subcommand {
-        let sub_shape = sub_field.shape();
-        // Handle Option<Enum> or direct Enum
-        let enum_shape = if let Def::Option(opt) = sub_shape.def {
-            opt.t
-        } else {
-            sub_shape
-        };
-
-        if let Type::User(UserType::Enum(enum_type)) = enum_shape.ty {
-            out.push_str(&format!("{}:\n", "COMMANDS".yellow().bold()));
-            for variant in enum_type.variants {
-                write_variant_help(out, variant);
-            }
-            out.push('\n');
+    if args.has_subcommands() {
+        out.push_str(&format!("{}:\n", "COMMANDS".yellow().bold()));
+        for sub in args.subcommands().values() {
+            write_subcommand_help(out, sub);
         }
+        out.push('\n');
     }
 }
 
-fn generate_enum_help(out: &mut String, program_name: &str, variants: &'static [Variant]) {
-    // For top-level enum, show subcommands
-    out.push_str(&format!("{}:\n    ", "USAGE".yellow().bold()));
-    out.push_str(program_name);
-    out.push_str(" <COMMAND>\n\n");
-
-    out.push_str(&format!("{}:\n", "COMMANDS".yellow().bold()));
-    for variant in variants {
-        write_variant_help(out, variant);
-    }
-    out.push('\n');
-}
-
-fn write_field_help(out: &mut String, field: &Field, is_positional: bool) {
+/// Write help for a single argument.
+fn write_arg_help(out: &mut String, arg: &ArgSchema) {
     out.push_str("    ");
 
-    // Short flag
-    let short = get_short_flag(field);
-    if let Some(c) = short {
+    let is_positional = arg.kind().is_positional();
+
+    // Short flag (or spacing for alignment)
+    if let Some(c) = arg.kind().short() {
         out.push_str(&format!("{}, ", format!("-{c}").green()));
     } else {
+        // Add spacing to align with flags that have short options
         out.push_str("    ");
     }
 
     // Long flag or positional name
-    let kebab_name = field.name.to_kebab_case();
-    let is_counted = is_counted_field(field) && is_supported_counted_type(field.shape());
+    let name = arg.name();
+    let is_counted = arg.kind().is_counted();
 
     if is_positional {
-        out.push_str(&format!(
-            "{}",
-            format!("<{}>", kebab_name.to_uppercase()).green()
-        ));
+        out.push_str(&format!("{}", format!("<{}>", name.to_uppercase()).green()));
     } else {
-        out.push_str(&format!("{}", format!("--{kebab_name}").green()));
+        out.push_str(&format!("{}", format!("--{name}").green()));
 
         // Show value placeholder for non-bool, non-counted types
-        let shape = field.shape();
-        if !is_counted && !shape.is_shape(bool::SHAPE) {
-            out.push_str(&format!(" <{}>", shape.type_identifier.to_uppercase()));
+        if !is_counted && !arg.value().is_bool() {
+            out.push_str(&format!(
+                " <{}>",
+                arg.value().type_identifier().to_uppercase()
+            ));
         }
     }
 
     // Doc comment
-    if let Some(doc) = field.doc.first() {
+    if let Some(summary) = arg.docs().summary() {
         out.push_str("\n            ");
-        out.push_str(doc.trim());
+        out.push_str(summary.trim());
     }
 
     if is_counted {
@@ -444,94 +318,19 @@ fn write_field_help(out: &mut String, field: &Field, is_positional: bool) {
     out.push('\n');
 }
 
-fn write_variant_help(out: &mut String, variant: &Variant) {
+/// Write help for a subcommand.
+fn write_subcommand_help(out: &mut String, sub: &Subcommand) {
     out.push_str("    ");
 
-    // Variant name (check for rename)
-    let name = variant
-        .get_builtin_attr("rename")
-        .and_then(|attr| attr.get_as::<&str>())
-        .map(|s| (*s).to_string())
-        .unwrap_or_else(|| variant.name.to_kebab_case());
-
-    out.push_str(&format!("{}", name.green()));
+    out.push_str(&format!("{}", sub.cli_name().green()));
 
     // Doc comment
-    if let Some(doc) = variant.doc.first() {
+    if let Some(summary) = sub.docs().summary() {
         out.push_str("\n            ");
-        out.push_str(doc.trim());
+        out.push_str(summary.trim());
     }
 
     out.push('\n');
-}
-
-/// Get the short flag character for a field, if any
-fn get_short_flag(field: &Field) -> Option<char> {
-    field
-        .get_attr(Some("args"), "short")
-        .and_then(|attr| attr.get_as::<crate::Attr>())
-        .and_then(|attr| {
-            if let crate::Attr::Short(c) = attr {
-                // If explicit char provided, use it; otherwise use first char of field name
-                c.or_else(|| field.name.chars().next())
-            } else {
-                None
-            }
-        })
-}
-
-/// Generate help for a specific subcommand variant.
-#[allow(dead_code)]
-pub fn generate_subcommand_help(
-    variant: &'static Variant,
-    parent_program: &str,
-    config: &HelpConfig,
-) -> String {
-    let mut out = String::new();
-
-    let variant_name = variant
-        .get_builtin_attr("rename")
-        .and_then(|attr| attr.get_as::<&str>())
-        .map(|s| (*s).to_string())
-        .unwrap_or_else(|| variant.name.to_kebab_case());
-
-    let full_name = format!("{parent_program} {variant_name}");
-
-    // Header
-    if let Some(version) = &config.version {
-        out.push_str(&format!("{full_name} {version}\n"));
-    } else {
-        out.push_str(&format!("{full_name}\n"));
-    }
-
-    // Variant doc comment
-    if !variant.doc.is_empty() {
-        out.push('\n');
-        for line in variant.doc {
-            out.push_str(line.trim());
-            out.push('\n');
-        }
-    }
-
-    out.push('\n');
-
-    // Generate help for variant fields
-    // Handle tuple variant with single struct field (newtype pattern)
-    // e.g., `Build(BuildArgs)` should flatten BuildArgs fields
-    // This matches clap's behavior: "automatically flattened with a tuple-variant"
-    let fields = variant.data.fields;
-    if variant.data.kind == StructKind::TupleStruct && fields.len() == 1 {
-        let inner_shape = fields[0].shape();
-        if let Type::User(UserType::Struct(struct_type)) = inner_shape.ty {
-            // Use the inner struct's fields instead of the tuple field
-            generate_struct_help(&mut out, &full_name, struct_type.fields);
-            return out;
-        }
-    }
-
-    generate_struct_help(&mut out, &full_name, fields);
-
-    out
 }
 
 #[cfg(test)]
@@ -565,7 +364,8 @@ mod tests {
 
     #[test]
     fn test_flatten_args_appear_in_help() {
-        let help = generate_help::<ArgsWithFlatten>(&HelpConfig::default());
+        let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).unwrap();
+        let help = generate_help_for_subcommand(&schema, &[], &HelpConfig::default());
 
         // Flattened fields should appear at top level
         assert!(
@@ -588,7 +388,8 @@ mod tests {
 
     #[test]
     fn test_flatten_docs_preserved() {
-        let help = generate_help::<ArgsWithFlatten>(&HelpConfig::default());
+        let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).unwrap();
+        let help = generate_help_for_subcommand(&schema, &[], &HelpConfig::default());
 
         // Doc comments from flattened fields should be present
         assert!(
@@ -598,6 +399,63 @@ mod tests {
         assert!(
             help.contains("quiet mode"),
             "help should contain quiet field doc"
+        );
+    }
+
+    /// Arguments for the serve subcommand
+    #[derive(Facet)]
+    struct ServeArgs {
+        /// Port to serve on
+        #[facet(crate::named)]
+        port: u16,
+
+        /// Host to bind to
+        #[facet(crate::named)]
+        host: String,
+    }
+
+    /// Top-level command with tuple variant subcommand
+    #[derive(Facet)]
+    struct TupleVariantArgs {
+        /// Subcommand to run
+        #[facet(crate::subcommand)]
+        command: Option<TupleVariantCommand>,
+    }
+
+    /// Command enum with tuple variant
+    #[derive(Facet)]
+    #[repr(u8)]
+    #[allow(dead_code)]
+    enum TupleVariantCommand {
+        /// Start the server
+        Serve(ServeArgs),
+    }
+
+    #[test]
+    fn test_tuple_variant_fields_not_shown_as_option() {
+        let schema = Schema::from_shape(TupleVariantArgs::SHAPE).unwrap();
+        // Path contains effective names (e.g., "Serve" not "serve")
+        let help =
+            generate_help_for_subcommand(&schema, &["Serve".to_string()], &HelpConfig::default());
+
+        // The inner struct's fields should appear
+        assert!(
+            help.contains("--port"),
+            "help should contain --port from ServeArgs"
+        );
+        assert!(
+            help.contains("--host"),
+            "help should contain --host from ServeArgs"
+        );
+
+        // The tuple field "0" should NOT appear as --0
+        assert!(
+            !help.contains("--0"),
+            "help should NOT show --0 for tuple variant wrapper field"
+        );
+        assert!(
+            !help.contains("SERVEARGS"),
+            "help should NOT show SERVEARGS as an option value"
         );
     }
 }

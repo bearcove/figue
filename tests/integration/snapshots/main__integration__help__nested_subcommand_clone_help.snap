@@ -14,7 +14,7 @@ ARGUMENTS:
             Repository URL
 
 OPTIONS:
-        --depth <OPTION>
+        --depth <U32>
             Clone depth (shallow clone)
-    -b, --branch <OPTION>
+    -b, --branch <STRING>
             Branch to clone

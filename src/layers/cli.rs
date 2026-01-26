@@ -641,11 +641,12 @@ impl<'a> ParseContext<'a> {
             // See module-level docs for the ConfigValue model.
             let _ = subcommand.is_flattened_tuple(); // Acknowledge the flag exists but don't use it here
 
-            // Use the effective name (rename or original) for deserialization
-            // facet-format matches against effective names, not original Rust names
+            // Use the effective name for deserialization - facet-format expects
+            // the effective name (respecting `#[facet(rename = "...")]`), e.g., "rm" for a
+            // variant named `Remove` with `#[facet(rename = "rm")]`.
             let enum_value = ConfigValue::Enum(Sourced {
                 value: EnumValue {
-                    variant: subcommand.name().to_string(),
+                    variant: subcommand.effective_name().to_string(),
                     fields,
                 },
                 span: None,

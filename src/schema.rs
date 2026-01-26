@@ -69,6 +69,9 @@ pub(crate) mod from_schema;
 #[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct Schema {
+    /// Documentation for the top-level type.
+    docs: Docs,
+
     /// Top-level arguments: `--verbose`, etc.
     args: ArgLevelSchema,
 
@@ -116,6 +119,9 @@ pub struct ArgLevelSchema {
     /// Name of the field that holds subcommands (e.g., "command" for `#[facet(args::subcommand)] command: Command`).
     /// None if there are no subcommands at this level.
     subcommand_field_name: Option<String>,
+
+    /// Whether the subcommand is optional (field type is `Option<Enum>`).
+    subcommand_optional: bool,
 }
 
 /// Schema for the `config` part of the schema
@@ -204,17 +210,36 @@ pub enum ValueSchema {
     },
 }
 
-/// Schema for a subcommand
+/// Schema for a subcommand.
+///
+/// # Naming conventions
+///
+/// There are three different "names" for any facet item (field, variant, etc.):
+///
+/// 1. **Rust name**: The actual Rust identifier (e.g., `Remove`, `log_file`).
+///    Available via `facet_core::Variant::name` or `facet_core::Field::name`.
+///
+/// 2. **Effective name**: The serialization name, respecting `#[facet(rename = "...")]`.
+///    For `#[facet(rename = "rm")] Remove`, the effective name is `"rm"`.
+///    Without rename, it's the same as the Rust name.
+///    Available via `facet_core::Variant::effective_name()`.
+///
+/// 3. **CLI name**: The command-line name, derived from effective_name converted to kebab-case.
+///    For `Remove` (no rename), the CLI name is `"remove"`.
+///    For `#[facet(rename = "rm")] Remove`, the CLI name is `"rm"` (already kebab-case).
+///    This is what users type on the command line.
+///
+/// The schema stores both `effective_name` (for deserialization) and `name` (CLI name, for matching).
 #[derive(Facet, Debug)]
 #[facet(skip_all_unless_truthy)]
 pub struct Subcommand {
-    /// Subcommand name (kebab-case or rename).
-    /// Derived from enum variant name, or `#[facet(rename = "...")]`.
+    /// CLI name (kebab-case, used for command-line matching).
+    /// Derived from effective_name converted to kebab-case.
     name: String,
 
-    /// Original Rust variant name (PascalCase).
-    /// Used for deserialization with facet-format which expects the actual variant name.
-    variant_name: String,
+    /// Effective name (respects `#[facet(rename = "...")]`).
+    /// Used for deserialization with facet-format.
+    effective_name: String,
 
     /// Documentation for this subcommand.
     docs: Docs,
@@ -418,6 +443,11 @@ impl ConfigValueSchema {
 // ============================================================================
 
 impl Schema {
+    /// Get the documentation for the top-level type.
+    pub fn docs(&self) -> &Docs {
+        &self.docs
+    }
+
     /// Get the top-level arguments schema.
     pub fn args(&self) -> &ArgLevelSchema {
         &self.args
@@ -451,6 +481,48 @@ impl ArgLevelSchema {
     pub fn subcommand_field_name(&self) -> Option<&str> {
         self.subcommand_field_name.as_deref()
     }
+
+    /// Check if the subcommand is optional (field type is `Option<Enum>`).
+    pub fn subcommand_optional(&self) -> bool {
+        self.subcommand_optional
+    }
+
+    /// Check if this level has any subcommands.
+    pub fn has_subcommands(&self) -> bool {
+        !self.subcommands.is_empty()
+    }
+}
+
+impl Docs {
+    /// Get the summary (first line of doc comment).
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+
+    /// Get the details (full doc comment after summary).
+    pub fn details(&self) -> Option<&str> {
+        self.details.as_deref()
+    }
+}
+
+impl ArgKind {
+    /// Get the short flag character if this is a named argument with a short flag.
+    pub fn short(&self) -> Option<char> {
+        match self {
+            ArgKind::Named { short, .. } => *short,
+            ArgKind::Positional => None,
+        }
+    }
+
+    /// Check if this is a counted flag.
+    pub fn is_counted(&self) -> bool {
+        matches!(self, ArgKind::Named { counted: true, .. })
+    }
+
+    /// Check if this is a positional argument.
+    pub fn is_positional(&self) -> bool {
+        matches!(self, ArgKind::Positional)
+    }
 }
 
 impl ArgSchema {
@@ -478,18 +550,23 @@ impl ArgSchema {
     pub fn multiple(&self) -> bool {
         self.multiple
     }
+
+    /// Get the documentation for this argument.
+    pub fn docs(&self) -> &Docs {
+        &self.docs
+    }
 }
 
 impl Subcommand {
-    /// Get the subcommand name (CLI name, kebab-case or renamed).
-    pub fn name(&self) -> &str {
+    /// Get the CLI name (kebab-case, used for command-line matching).
+    pub fn cli_name(&self) -> &str {
         &self.name
     }
 
-    /// Get the original Rust variant name (PascalCase).
+    /// Get the effective name (respects `#[facet(rename = "...")]`).
     /// This is what facet-format expects for deserialization.
-    pub fn variant_name(&self) -> &str {
-        &self.variant_name
+    pub fn effective_name(&self) -> &str {
+        &self.effective_name
     }
 
     /// Get the arguments schema for this subcommand.
@@ -501,6 +578,11 @@ impl Subcommand {
     /// When true, parsed fields need to be wrapped in a "0" field for deserialization.
     pub fn is_flattened_tuple(&self) -> bool {
         self.is_flattened_tuple
+    }
+
+    /// Get the documentation for this subcommand.
+    pub fn docs(&self) -> &Docs {
+        &self.docs
     }
 }
 
@@ -566,6 +648,22 @@ impl ValueSchema {
             ValueSchema::Option { value, .. } => value.as_ref(),
             other => other,
         }
+    }
+
+    /// Get the type identifier for display purposes (e.g., "STRING", "U16").
+    /// Returns the innermost type's identifier, unwrapping Option/Vec.
+    pub fn type_identifier(&self) -> &'static str {
+        match self {
+            ValueSchema::Leaf(leaf) => leaf.shape.type_identifier,
+            ValueSchema::Option { value, .. } => value.type_identifier(),
+            ValueSchema::Vec { element, .. } => element.type_identifier(),
+            ValueSchema::Struct { shape, .. } => shape.type_identifier,
+        }
+    }
+
+    /// Check if this is an Option type.
+    pub fn is_option(&self) -> bool {
+        matches!(self, ValueSchema::Option { .. })
     }
 }
 

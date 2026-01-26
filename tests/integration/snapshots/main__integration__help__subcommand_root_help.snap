@@ -14,7 +14,7 @@ OPTIONS:
             Show help message and exit.
     -V, --version
             Show version and exit.
-        --completions <OPTION>
+        --completions <SHELL>
             Generate shell completions.
 
 COMMANDS:

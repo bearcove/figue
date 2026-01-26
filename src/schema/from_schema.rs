@@ -80,7 +80,11 @@ impl Schema {
             None
         };
 
+        // Extract docs from the top-level shape
+        let docs = docs_from_lines(shape.doc);
+
         Ok(Schema {
+            docs,
             args,
             config,
             special,
@@ -165,7 +169,7 @@ fn enum_variants(enum_type: EnumType) -> Vec<String> {
 }
 
 fn variant_cli_name(variant: &Variant) -> String {
-    variant.effective_name().to_string()
+    variant.effective_name().to_kebab_case()
 }
 
 fn leaf_schema_from_shape(
@@ -391,6 +395,7 @@ fn arg_level_from_fields_with_prefix(
     let mut args: IndexMap<String, ArgSchema, RandomState> = IndexMap::default();
     let mut subcommands: IndexMap<String, Subcommand, RandomState> = IndexMap::default();
     let mut subcommand_field_name: Option<String> = None;
+    let mut subcommand_optional: bool = false;
     let mut special = SpecialFields::default();
 
     let mut seen_long: HashMap<String, SchemaErrorContext> = HashMap::new();
@@ -489,6 +494,7 @@ fn arg_level_from_fields_with_prefix(
                 }
                 first_subcommand_field = Some(field_ctx.clone());
                 subcommand_field_name = inner.subcommand_field_name;
+                subcommand_optional = inner.subcommand_optional;
             }
 
             continue;
@@ -548,9 +554,9 @@ fn arg_level_from_fields_with_prefix(
             subcommand_field_name = Some(field.name.to_string());
 
             let field_shape = field.shape();
-            let (enum_shape, enum_type) = match field_shape.def {
+            let (enum_shape, enum_type, is_optional) = match field_shape.def {
                 Def::Option(opt) => match opt.t.ty {
-                    Type::User(UserType::Enum(enum_type)) => (opt.t, enum_type),
+                    Type::User(UserType::Enum(enum_type)) => (opt.t, enum_type, true),
                     _ => {
                         return Err(SchemaError::new(
                             field_ctx,
@@ -562,7 +568,7 @@ fn arg_level_from_fields_with_prefix(
                     }
                 },
                 _ => match field_shape.ty {
-                    Type::User(UserType::Enum(enum_type)) => (field_shape, enum_type),
+                    Type::User(UserType::Enum(enum_type)) => (field_shape, enum_type, false),
                     _ => {
                         return Err(SchemaError::new(
                             field_ctx,
@@ -574,37 +580,38 @@ fn arg_level_from_fields_with_prefix(
                     }
                 },
             };
+            subcommand_optional = is_optional;
 
             for variant in enum_type.variants {
-                let name = variant_cli_name(variant);
-                // Use the original Rust variant name for deserialization - facet-format
-                // expects the actual variant name (e.g., "List"), not the renamed CLI name ("ls").
-                let variant_name = variant.name.to_string();
+                let cli_name = variant_cli_name(variant);
+                // effective_name respects #[facet(rename = "...")], used for deserialization
+                let effective_name = variant.effective_name().to_string();
                 let docs = docs_from_lines(variant.doc);
                 let variant_fields = variant_fields_for_schema(variant);
-                let variant_ctx = SchemaErrorContext::root(enum_shape).with_variant(name.clone());
+                let variant_ctx =
+                    SchemaErrorContext::root(enum_shape).with_variant(cli_name.clone());
                 let args_schema = arg_level_from_fields(variant_fields, &variant_ctx)?;
                 let is_flattened_tuple = is_flattened_tuple_variant(variant);
 
                 let sub = Subcommand {
-                    name: name.clone(),
-                    variant_name,
+                    name: cli_name.clone(),
+                    effective_name,
                     docs,
                     args: args_schema,
                     is_flattened_tuple,
                     shape: enum_shape,
                 };
 
-                if let Some(existing_ctx) = seen_subcommands.get(&name) {
+                if let Some(existing_ctx) = seen_subcommands.get(&cli_name) {
                     return Err(SchemaError::new(
                         existing_ctx.clone(),
-                        format!("duplicate subcommand name `{name}`"),
+                        format!("duplicate subcommand name `{cli_name}`"),
                     )
                     .with_primary_label("first defined here")
                     .with_label(variant_ctx, "defined again here"));
                 }
-                seen_subcommands.insert(name.clone(), variant_ctx.clone());
-                subcommands.insert(name.clone(), sub);
+                seen_subcommands.insert(cli_name.clone(), variant_ctx.clone());
+                subcommands.insert(cli_name.clone(), sub);
             }
 
             continue;
@@ -710,6 +717,7 @@ fn arg_level_from_fields_with_prefix(
             args,
             subcommands,
             subcommand_field_name,
+            subcommand_optional,
         },
         special,
     ))
