@@ -30,6 +30,7 @@ use crate::schema::{
 /// The builder handles converting these to `ConfigValue` with proper
 /// provenance and type coercion.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LeafValue {
     String(String),
     Bool(bool),
@@ -187,6 +188,7 @@ impl<'a> ValueBuilder<'a> {
     }
 
     /// Check if a value exists at the given path.
+    #[allow(dead_code)]
     pub fn has_value_at(&self, path: &Path) -> bool {
         if path.is_empty() {
             return false;
@@ -200,13 +202,12 @@ impl<'a> ValueBuilder<'a> {
                 }
                 Some(ConfigValue::Array(arr)) if i < path.len() - 1 => {
                     // Next segment should be a numeric index
-                    if let Some(next_segment) = path.get(i + 1) {
-                        if let Ok(idx) = next_segment.parse::<usize>() {
-                            if let Some(ConfigValue::Object(obj)) = arr.value.get(idx) {
-                                current = &obj.value;
-                                continue;
-                            }
-                        }
+                    if let Some(next_segment) = path.get(i + 1)
+                        && let Ok(idx) = next_segment.parse::<usize>()
+                        && let Some(ConfigValue::Object(obj)) = arr.value.get(idx)
+                    {
+                        current = &obj.value;
+                        continue;
                     }
                     return false;
                 }
@@ -267,6 +268,7 @@ impl<'a> ValueBuilder<'a> {
     }
 
     /// Get access to the schema.
+    #[allow(dead_code)]
     pub fn schema(&self) -> &'a ConfigStructSchema {
         self.schema
     }
@@ -336,7 +338,9 @@ impl<'a> ValueBuilder<'a> {
             ConfigValueSchema::Struct(struct_schema) => {
                 self.resolve_struct_path(struct_schema, path, result)
             }
-            ConfigValueSchema::Enum(enum_schema) => self.resolve_enum_path(enum_schema, path, result),
+            ConfigValueSchema::Enum(enum_schema) => {
+                self.resolve_enum_path(enum_schema, path, result)
+            }
             ConfigValueSchema::Vec(vec_schema) => {
                 // Path segment should be a numeric index
                 let index_segment = &path[0];

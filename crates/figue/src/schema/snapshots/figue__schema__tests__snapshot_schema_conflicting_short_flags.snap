@@ -1,5 +1,5 @@
 ---
-source: src/schema/tests.rs
+source: crates/figue/src/schema/tests.rs
 expression: stripped
 ---
 Error: duplicate flag `-v`
@@ -7,7 +7,7 @@ Error: duplicate flag `-v`
    │
  2 │ struct ConflictingShortFlags {
    │        ──────────┬──────────  
-   │                  ╰──────────── defined at src/schema/tests.rs:122
+   │                  ╰──────────── defined at crates/figue/src/schema/tests.rs:122
    │ 
  4 │     a: bool,
    │     ───┬───  

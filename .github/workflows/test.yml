@@ -22,7 +22,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run tests
-        run: cargo nextest run
+        run: cargo nextest run --workspace
 
   clippy:
     runs-on: depot-ubuntu-24.04-8
@@ -34,7 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run clippy
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
   docs:
     runs-on: depot-ubuntu-24.04-8
@@ -48,7 +48,7 @@ jobs:
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps
+        run: cargo doc --workspace --no-deps
 
   lockfile:
     runs-on: depot-ubuntu-24.04-8

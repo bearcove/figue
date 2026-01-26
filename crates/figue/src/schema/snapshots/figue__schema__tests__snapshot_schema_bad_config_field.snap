@@ -1,5 +1,5 @@
 ---
-source: src/schema/tests.rs
+source: crates/figue/src/schema/tests.rs
 expression: stripped
 ---
 Error: config field must be a struct
@@ -7,7 +7,7 @@ Error: config field must be a struct
    │
  2 │ struct BadConfigField {
    │        ───────┬──────  
-   │               ╰──────── defined at src/schema/tests.rs:130
+   │               ╰──────── defined at crates/figue/src/schema/tests.rs:130
    │ 
  4 │     config: String,
    │     ───────┬──────  
