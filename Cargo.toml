@@ -42,6 +42,7 @@ tracing = "0.1"
 ariadne = "0.6"
 unicode-width = "0.2.2"
 strip-ansi-escapes = "0.2.1"
+strsim = "0.11"
 insta = "1"
 tempfile = "3"
 

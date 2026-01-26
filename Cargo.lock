@@ -675,6 +675,7 @@ dependencies = [
  "insta",
  "owo-colors",
  "strip-ansi-escapes",
+ "strsim",
  "tempfile",
  "tracing",
  "unicode-width",
