@@ -257,6 +257,7 @@ impl<'a> EnvParseContext<'a> {
 
         let prefix_with_sep = format!("{}__", prefix);
 
+        // First pass: collect all prefixed env vars (higher priority)
         for (name, value) in source.vars() {
             // Check if this var matches our prefix
             if !name.starts_with(&prefix_with_sep) {
@@ -311,6 +312,71 @@ impl<'a> EnvParseContext<'a> {
             let config_value = self.parse_value(&value, &name);
             self.insert_at_path(&target_path, config_value);
         }
+
+        // Second pass: check env aliases (lower priority than prefixed vars)
+        // Only set if the field wasn't already set by a prefixed var
+        if let Some(config_schema) = self.config_schema {
+            self.check_env_aliases(config_schema, source, &[]);
+        }
+    }
+
+    /// Recursively check env aliases for all fields in a config struct.
+    fn check_env_aliases(
+        &mut self,
+        schema: &ConfigStructSchema,
+        source: &dyn EnvSource,
+        parent_path: &[String],
+    ) {
+        for (field_name, field_schema) in schema.fields() {
+            let mut field_path = parent_path.to_vec();
+            field_path.push(field_name.clone());
+
+            // Check if this field has aliases and wasn't already set
+            for alias in field_schema.env_aliases() {
+                if !self.has_value_at_path(&field_path)
+                    && let Some(value) = source.get(alias)
+                {
+                    let config_value = self.parse_value(&value, alias);
+                    self.insert_at_path(&field_path, config_value);
+                    // Only use the first matching alias
+                    break;
+                }
+            }
+
+            // Recurse into nested structs
+            match field_schema.value() {
+                ConfigValueSchema::Struct(nested) => {
+                    self.check_env_aliases(nested, source, &field_path);
+                }
+                ConfigValueSchema::Option { value, .. } => {
+                    if let ConfigValueSchema::Struct(nested) = value.as_ref() {
+                        self.check_env_aliases(nested, source, &field_path);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Check if a value exists at the given path in config_fields.
+    fn has_value_at_path(&self, path: &[String]) -> bool {
+        if path.is_empty() {
+            return false;
+        }
+
+        let mut current = &self.config_fields;
+        for (i, segment) in path.iter().enumerate() {
+            match current.get(segment) {
+                Some(ConfigValue::Object(obj)) if i < path.len() - 1 => {
+                    current = &obj.value;
+                }
+                Some(_) if i == path.len() - 1 => {
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Resolve an input path against the schema, validating it exists.
@@ -1219,5 +1285,208 @@ mod tests {
             "unused key should contain 'common': {:?}",
             output.unused_keys
         );
+    }
+
+    // ========================================================================
+    // Tests: Env aliases
+    // ========================================================================
+
+    #[derive(Facet)]
+    struct ConfigWithAlias {
+        /// Database URL with standard alias
+        #[facet(args::env_alias = "DATABASE_URL")]
+        database_url: String,
+
+        /// Port without alias
+        port: u16,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithAliasConfig {
+        #[facet(args::config)]
+        config: ConfigWithAlias,
+    }
+
+    #[test]
+    fn test_env_alias_basic() {
+        // DATABASE_URL should be read via the alias
+        let schema = Schema::from_shape(ArgsWithAliasConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("DATABASE_URL", "postgres://localhost/mydb")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        let value = output.value.expect("should have value");
+
+        let db_url = get_nested(&value, &["config", "database_url"]).expect("config.database_url");
+        assert_eq!(get_string(db_url), Some("postgres://localhost/mydb"));
+    }
+
+    #[test]
+    fn test_env_alias_prefixed_wins() {
+        // When both prefixed and alias are set, prefixed wins
+        let schema = Schema::from_shape(ArgsWithAliasConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([
+            ("DATABASE_URL", "alias_value"),
+            ("REEF__DATABASE_URL", "prefixed_value"),
+        ]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        let value = output.value.expect("should have value");
+
+        let db_url = get_nested(&value, &["config", "database_url"]).expect("config.database_url");
+        // Prefixed var should win over alias
+        assert_eq!(get_string(db_url), Some("prefixed_value"));
+    }
+
+    #[test]
+    fn test_env_alias_only_alias_set() {
+        // Only alias set, no prefixed - alias should be used
+        let schema = Schema::from_shape(ArgsWithAliasConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("DATABASE_URL", "alias_value"), ("REEF__PORT", "8080")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        let value = output.value.expect("should have value");
+
+        let db_url = get_nested(&value, &["config", "database_url"]).expect("config.database_url");
+        assert_eq!(get_string(db_url), Some("alias_value"));
+
+        let port = get_nested(&value, &["config", "port"]).expect("config.port");
+        assert_eq!(get_string(port), Some("8080"));
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithMultipleAliases {
+        /// Database URL with multiple aliases
+        #[facet(args::env_alias = "DATABASE_URL", args::env_alias = "DB_URL")]
+        database_url: String,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithMultipleAliasConfig {
+        #[facet(args::config)]
+        config: ConfigWithMultipleAliases,
+    }
+
+    #[test]
+    fn test_env_alias_multiple_aliases_first_wins() {
+        // When multiple aliases exist, the first one found is used
+        let schema = Schema::from_shape(ArgsWithMultipleAliasConfig::SHAPE).unwrap();
+        // Only the second alias is set
+        let env = MockEnv::from_pairs([("DB_URL", "second_alias_value")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        let value = output.value.expect("should have value");
+
+        let db_url = get_nested(&value, &["config", "database_url"]).expect("config.database_url");
+        assert_eq!(get_string(db_url), Some("second_alias_value"));
+    }
+
+    #[test]
+    fn test_env_alias_provenance() {
+        // Provenance should show the actual alias var that was used
+        use crate::provenance::Provenance;
+
+        let schema = Schema::from_shape(ArgsWithAliasConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("DATABASE_URL", "postgres://localhost/mydb")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        let value = output.value.expect("should have value");
+        let db_url = get_nested(&value, &["config", "database_url"]).expect("config.database_url");
+
+        if let ConfigValue::String(s) = db_url {
+            let prov = s.provenance.as_ref().expect("should have provenance");
+            if let Provenance::Env { var, value } = prov {
+                // Should show DATABASE_URL, not REEF__DATABASE_URL
+                assert_eq!(var, "DATABASE_URL");
+                assert_eq!(value, "postgres://localhost/mydb");
+            } else {
+                panic!("expected Env provenance");
+            }
+        } else {
+            panic!("expected string");
+        }
+    }
+
+    #[derive(Facet)]
+    struct NestedConfigWithAlias {
+        db: DbConfig,
+    }
+
+    #[derive(Facet)]
+    struct DbConfig {
+        #[facet(args::env_alias = "DATABASE_URL")]
+        url: String,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithNestedAliasConfig {
+        #[facet(args::config)]
+        config: NestedConfigWithAlias,
+    }
+
+    #[test]
+    fn test_env_alias_in_nested_struct() {
+        // Alias should work even when field is in a nested struct
+        let schema = Schema::from_shape(ArgsWithNestedAliasConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("DATABASE_URL", "postgres://localhost/mydb")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        let value = output.value.expect("should have value");
+
+        let url = get_nested(&value, &["config", "db", "url"]).expect("config.db.url");
+        assert_eq!(get_string(url), Some("postgres://localhost/mydb"));
+    }
+
+    #[test]
+    fn test_env_alias_nested_prefixed_wins() {
+        // Prefixed var should win over alias even in nested struct
+        let schema = Schema::from_shape(ArgsWithNestedAliasConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([
+            ("DATABASE_URL", "alias_value"),
+            ("REEF__DB__URL", "prefixed_value"),
+        ]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        let value = output.value.expect("should have value");
+        let url = get_nested(&value, &["config", "db", "url"]).expect("config.db.url");
+        assert_eq!(get_string(url), Some("prefixed_value"));
     }
 }

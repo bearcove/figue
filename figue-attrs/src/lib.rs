@@ -80,6 +80,30 @@ facet::define_attr_grammar! {
         ///
         /// Example: `env_prefix = "MYAPP"` results in `MYAPP__FIELD__NAME` env vars.
         EnvPrefix(Option<&'static str>),
+        /// Specifies an additional environment variable name for a config field.
+        ///
+        /// This allows a field to be read from standard environment variables
+        /// like `DATABASE_URL` or `PORT` in addition to the prefixed form.
+        ///
+        /// The prefixed env var takes priority over aliases when both are set.
+        /// Multiple aliases can be specified by using the attribute multiple times.
+        ///
+        /// Usage: `#[facet(args::env_alias = "DATABASE_URL")]`
+        ///
+        /// Example:
+        /// ```ignore
+        /// #[derive(Facet)]
+        /// struct Config {
+        ///     /// Also reads from $DATABASE_URL
+        ///     #[facet(args::env_alias = "DATABASE_URL")]
+        ///     database_url: String,
+        ///
+        ///     /// Reads from $PORT or $HTTP_PORT
+        ///     #[facet(args::env_alias = "PORT", args::env_alias = "HTTP_PORT")]
+        ///     port: u16,
+        /// }
+        /// ```
+        EnvAlias(&'static str),
         /// Marks a field as the help flag.
         ///
         /// When this flag is set, the driver shows help and exits with code 0.

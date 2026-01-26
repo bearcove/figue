@@ -113,6 +113,22 @@ fn extract_env_prefix(field: &Field) -> Option<String> {
     }
 }
 
+/// Extract all env_alias values from a field's `#[facet(args::env_alias = "...")]` attributes.
+/// Multiple aliases can be specified by using the attribute multiple times.
+fn extract_env_aliases(field: &Field) -> Vec<String> {
+    let mut aliases = Vec::new();
+    // Iterate through all attributes to find all env_alias entries
+    for field_attr in field.attributes {
+        if field_attr.ns == Some("args") && field_attr.key == "env_alias" {
+            // The attribute data is stored as &str directly
+            if let Some(s) = field_attr.get_as::<&str>() {
+                aliases.push(s.to_string());
+            }
+        }
+    }
+    aliases
+}
+
 fn docs_from_lines(lines: &'static [&'static str]) -> Docs {
     if lines.is_empty() {
         return Docs::default();
@@ -263,6 +279,7 @@ fn config_enum_schema_from_shape(
             let field_ctx = variant_ctx.with_field(field.name);
             let field_docs = docs_from_lines(field.doc);
             let sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
+            let env_aliases = extract_env_aliases(field);
             let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
             fields.insert(
@@ -270,6 +287,7 @@ fn config_enum_schema_from_shape(
                 ConfigFieldSchema {
                     docs: field_docs,
                     sensitive,
+                    env_aliases,
                     value,
                 },
             );
@@ -362,6 +380,7 @@ fn config_struct_schema_from_shape_with_prefix(
         // Non-flattened field
         let docs = docs_from_lines(field.doc);
         let sensitive = field.flags.contains(facet_core::FieldFlags::SENSITIVE);
+        let env_aliases = extract_env_aliases(field);
         let value = config_value_schema_from_shape(field.shape(), &field_ctx)?;
 
         // Use the effective (serialized) name as the key
@@ -372,6 +391,7 @@ fn config_struct_schema_from_shape_with_prefix(
             ConfigFieldSchema {
                 docs,
                 sensitive,
+                env_aliases,
                 value,
             },
         );
