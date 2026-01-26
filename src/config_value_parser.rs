@@ -98,10 +98,7 @@ pub(crate) fn fill_defaults_from_schema(value: &ConfigValue, schema: &Schema) ->
 
     // Fill defaults for config field if present
     if let Some(config_schema) = schema.config() {
-        let config_field_name = config_schema
-            .field_name()
-            .unwrap_or("config")
-            .to_string();
+        let config_field_name = config_schema.field_name().unwrap_or("config").to_string();
 
         if let Some(config_value) = new_map.get(&config_field_name) {
             let filled = fill_defaults_from_config_struct(config_value, config_schema, "");
@@ -385,7 +382,11 @@ fn fill_defaults_from_config_value_schema(
                     .value
                     .iter()
                     .map(|item| {
-                        fill_defaults_from_config_value_schema(item, vec_schema.element(), path_prefix)
+                        fill_defaults_from_config_value_schema(
+                            item,
+                            vec_schema.element(),
+                            path_prefix,
+                        )
                     })
                     .collect();
                 ConfigValue::Array(Sourced {
@@ -2223,6 +2224,7 @@ mod fill_defaults_tests {
     // Test 3: Enum with struct variant
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum EnumWithStructVariant {
         Variant {
             #[facet(default)]
@@ -2255,6 +2257,7 @@ mod fill_defaults_tests {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum EnumWithTupleVariant {
         TupleVar(TuplePayload),
     }
@@ -2294,6 +2297,7 @@ mod fill_defaults_tests {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum EnumWithFlattenInVariant {
         Cmd {
             #[facet(flatten)]
@@ -2386,6 +2390,7 @@ mod fill_defaults_tests {
     // Test 7: Renamed enum variant
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum RenamedVariantEnum {
         #[facet(rename = "ls")]
         List {

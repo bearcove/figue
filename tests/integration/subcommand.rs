@@ -1,4 +1,3 @@
-
 use crate::assert_diag_snapshot;
 use facet::Facet;
 use facet_testhelpers::test;
@@ -358,6 +357,7 @@ fn test_missing_nested_subcommand_error() {
 
     #[derive(Debug, Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// CI workflow management
         Ci {
@@ -368,6 +368,7 @@ fn test_missing_nested_subcommand_error() {
 
     #[derive(Debug, Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum CiAction {
         /// Generate CI workflow files from Rust code
         Generate {
@@ -393,6 +394,7 @@ fn test_wrong_argument_style_for_nested_subcommand() {
 
     #[derive(Debug, Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// CI workflow management
         Ci {
@@ -403,6 +405,7 @@ fn test_wrong_argument_style_for_nested_subcommand() {
 
     #[derive(Debug, Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum CiAction {
         /// Generate CI workflow files from Rust code
         Generate {
@@ -428,6 +431,7 @@ fn test_unknown_nested_subcommand_error() {
 
     #[derive(Debug, Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// CI workflow management
         Ci {
@@ -438,6 +442,7 @@ fn test_unknown_nested_subcommand_error() {
 
     #[derive(Debug, Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum CiAction {
         /// Generate CI workflow files from Rust code
         Generate {

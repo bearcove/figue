@@ -1,4 +1,3 @@
-
 use crate::assert_help_snapshot;
 use facet::Facet;
 use figue as args;
@@ -57,6 +56,7 @@ struct GitArgs {
 /// Available git commands
 #[derive(Facet, Debug)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum GitCommand {
     /// Clone a repository
     Clone {
@@ -87,6 +87,7 @@ enum GitCommand {
 /// Remote management commands
 #[derive(Facet, Debug)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum RemoteAction {
     /// Add a new remote
     Add {
@@ -175,6 +176,7 @@ fn test_tuple_variant_subcommand_help_flattening() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// Build the project
         Build(BuildArgs),
@@ -224,6 +226,7 @@ struct PkgManager {
 
 #[derive(Facet, Debug)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum PkgCommand {
     /// Install a package
     Install {
@@ -411,6 +414,7 @@ struct NestedCli {
 
 #[derive(Facet, Debug)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum TopLevel {
     /// Manage repositories
     Repo {
@@ -423,6 +427,7 @@ enum TopLevel {
 
 #[derive(Facet, Debug)]
 #[repr(u8)]
+#[allow(dead_code)]
 enum RepoCmd {
     /// Clone a repository
     Clone {

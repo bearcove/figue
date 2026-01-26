@@ -1194,6 +1194,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// Build the project
         Build(BuildArgs),
@@ -1763,6 +1764,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum CvCommand {
         Build {
             #[facet(flatten)]
@@ -1963,6 +1965,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum SubCommand1 {
         Build {
             #[facet(flatten)]
@@ -1994,6 +1997,7 @@ mod tests {
     // ------------------------------------------------------------------------
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum DbSubCommand {
         Create {
             #[facet(args::positional)]
@@ -2009,6 +2013,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum TopCommand {
         Db {
             #[facet(args::subcommand)]
@@ -2078,6 +2083,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum PkgCommand {
         Install(#[facet(flatten)] InstallOpts),
         Uninstall {
@@ -2142,6 +2148,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum DeepFlattenCmd {
         Run {
             #[facet(flatten)]
@@ -2182,6 +2189,7 @@ mod tests {
     // ------------------------------------------------------------------------
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum SimpleCmd {
         Start,
         Stop,
@@ -2223,6 +2231,7 @@ mod tests {
     // ------------------------------------------------------------------------
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum RenamedCmd {
         #[facet(rename = "ls")]
         List {
@@ -2275,6 +2284,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum ActionCmd {
         Run {
             #[facet(args::positional)]
@@ -2375,6 +2385,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum ChildCommand {
         /// Build subcommand - no verbose flag here
         Build {
@@ -2452,6 +2463,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum ParentCommand {
         Repo {
             /// Parent-level flag
@@ -2465,6 +2477,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum RepoAction {
         Clone {
             #[facet(args::positional)]
@@ -2567,6 +2580,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum ChildWithSameFlag {
         Run {
             /// Local verbose flag - shadows parent
@@ -2626,6 +2640,7 @@ mod tests {
 
     #[derive(Facet)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum AppCommand {
         Install {
             #[facet(args::positional)]
