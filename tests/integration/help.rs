@@ -265,7 +265,7 @@ enum PkgCommand {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_subcommand_install() {
     // `pkg install --help` should show help specific to the install subcommand
     let result = figue::from_slice::<PkgManager>(&["install", "--help"]);
@@ -304,7 +304,7 @@ fn test_help_subcommand_install() {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_subcommand_remove() {
     // `pkg rm --help` should show help specific to the remove subcommand
     let result = figue::from_slice::<PkgManager>(&["rm", "--help"]);
@@ -342,7 +342,7 @@ fn test_help_subcommand_remove() {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_subcommand_list() {
     // `pkg ls --help` should show help specific to the list subcommand
     let result = figue::from_slice::<PkgManager>(&["ls", "--help"]);
@@ -452,7 +452,7 @@ enum RepoCmd {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_nested_subcommand_clone() {
     // `myapp repo clone --help` should show clone-specific help
     let result = figue::from_slice::<NestedCli>(&["repo", "clone", "--help"]);
@@ -487,7 +487,7 @@ fn test_help_nested_subcommand_clone() {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_nested_subcommand_push() {
     // `myapp repo push --help` should show push-specific help
     let result = figue::from_slice::<NestedCli>(&["repo", "push", "--help"]);
@@ -518,7 +518,7 @@ fn test_help_nested_subcommand_push() {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_nested_intermediate_level() {
     // `myapp repo --help` should show repo-level help (listing clone, push)
     let result = figue::from_slice::<NestedCli>(&["repo", "--help"]);
@@ -539,7 +539,7 @@ fn test_help_nested_intermediate_level() {
 }
 
 #[test]
-#[ignore = "subcommand-specific help not yet implemented"]
+
 fn test_help_short_flag_h_works_in_subcommand() {
     // `pkg install -h` should also work
     let result = figue::from_slice::<PkgManager>(&["install", "-h"]);

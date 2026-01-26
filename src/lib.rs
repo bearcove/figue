@@ -7,6 +7,9 @@
 
 extern crate self as figue;
 
+#[macro_use]
+mod macros;
+
 // pub(crate) mod arg;
 pub(crate) mod builder;
 pub(crate) mod completions;

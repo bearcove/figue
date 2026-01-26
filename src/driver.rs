@@ -28,7 +28,7 @@ use crate::completions::{Shell, generate_completions_for_shape};
 use crate::config_value::ConfigValue;
 use crate::config_value_parser::{fill_defaults_from_shape, from_config_value};
 use crate::dump::{collect_missing_fields, dump_config_with_provenance};
-use crate::help::generate_help_for_shape;
+use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
 use crate::path::Path;
@@ -170,7 +170,17 @@ impl<T: Facet<'static>> Driver<T> {
                     .as_ref()
                     .cloned()
                     .unwrap_or_default();
-                let text = generate_help_for_shape(T::SHAPE, &help_config);
+
+                // Extract subcommand path for subcommand-aware help
+                let subcommand_path = if let Some(subcommand_field) =
+                    self.config.schema.args().subcommand_field_name()
+                {
+                    cli_value.extract_subcommand_path(subcommand_field)
+                } else {
+                    Vec::new()
+                };
+
+                let text = generate_help_for_subcommand(T::SHAPE, &subcommand_path, &help_config);
                 return Err(DriverError::Help { text });
             }
 

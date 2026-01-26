@@ -281,6 +281,53 @@ impl ConfigValue {
             }
         }
     }
+
+    /// Extract the selected subcommand path from a ConfigValue.
+    ///
+    /// Given a ConfigValue representing parsed CLI args, this extracts the chain of
+    /// selected subcommands. For example, if the user ran `myapp repo clone --help`,
+    /// this would return `["Repo", "Clone"]` (using variant names, not CLI names).
+    ///
+    /// The `subcommand_field_name` is the name of the field that holds the subcommand
+    /// at the root level (e.g., "command" for `#[facet(args::subcommand)] command: Command`).
+    pub fn extract_subcommand_path(&self, subcommand_field_name: &str) -> Vec<String> {
+        let mut path = Vec::new();
+        self.extract_subcommand_path_recursive(subcommand_field_name, &mut path);
+        path
+    }
+
+    fn extract_subcommand_path_recursive(&self, field_name: &str, path: &mut Vec<String>) {
+        // Look for the subcommand field in this value
+        let subcommand_value = match self {
+            ConfigValue::Object(obj) => obj.value.get(field_name),
+            _ => None,
+        };
+
+        if let Some(ConfigValue::Enum(enum_val)) = subcommand_value {
+            // Add this variant to the path
+            path.push(enum_val.value.variant.clone());
+
+            // Check if this variant has a nested subcommand
+            // Look for a field that itself contains an Enum (indicating nested subcommand)
+            for (_key, value) in &enum_val.value.fields {
+                if let ConfigValue::Enum(nested) = value {
+                    // Found a nested subcommand - add it and recurse
+                    path.push(nested.value.variant.clone());
+                    // Check if this nested enum has further nested subcommands
+                    for (_k, v) in &nested.value.fields {
+                        if matches!(v, ConfigValue::Enum(_)) {
+                            // Recurse with a synthetic object containing this enum
+                            let mut synthetic = ObjectMap::default();
+                            synthetic.insert("__nested".to_string(), v.clone());
+                            let obj = ConfigValue::Object(Sourced::new(synthetic));
+                            obj.extract_subcommand_path_recursive("__nested", path);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -603,5 +650,119 @@ mod tests {
         } else {
             panic!("expected object");
         }
+    }
+
+    /// Helper to create a test ConfigValue object
+    fn cv_object(fields: impl IntoIterator<Item = (&'static str, ConfigValue)>) -> ConfigValue {
+        let map: ObjectMap = fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        ConfigValue::Object(Sourced::new(map))
+    }
+
+    /// Helper to create a test ConfigValue enum
+    fn cv_enum(
+        variant: &str,
+        fields: impl IntoIterator<Item = (&'static str, ConfigValue)>,
+    ) -> ConfigValue {
+        let map: ObjectMap = fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        ConfigValue::Enum(Sourced::new(EnumValue {
+            variant: variant.to_string(),
+            fields: map,
+        }))
+    }
+
+    fn cv_string(s: &str) -> ConfigValue {
+        ConfigValue::String(Sourced::new(s.to_string()))
+    }
+
+    fn cv_bool(b: bool) -> ConfigValue {
+        ConfigValue::Bool(Sourced::new(b))
+    }
+
+    #[test]
+    fn test_extract_subcommand_path_single_level() {
+        // Simulates: myapp install foo
+        // Structure: { command: Enum("Install", { package: "foo" }) }
+        let cli_value = cv_object([(
+            "command",
+            cv_enum("Install", [("package", cv_string("foo"))]),
+        )]);
+
+        let path = cli_value.extract_subcommand_path("command");
+        assert_eq!(path, vec!["Install"]);
+    }
+
+    #[test]
+    fn test_extract_subcommand_path_two_levels() {
+        // Simulates: myapp repo clone https://example.com
+        // Structure: { command: Enum("Repo", { action: Enum("Clone", { url: "..." }) }) }
+        let cli_value = cv_object([(
+            "command",
+            cv_enum(
+                "Repo",
+                [(
+                    "action",
+                    cv_enum("Clone", [("url", cv_string("https://example.com"))]),
+                )],
+            ),
+        )]);
+
+        let path = cli_value.extract_subcommand_path("command");
+        assert_eq!(path, vec!["Repo", "Clone"]);
+    }
+
+    #[test]
+    fn test_extract_subcommand_path_three_levels() {
+        // Simulates: myapp cloud aws s3 upload
+        // Structure: { command: Enum("Cloud", { provider: Enum("Aws", { service: Enum("S3", { action: Enum("Upload", {}) }) }) }) }
+        let cli_value = cv_object([(
+            "command",
+            cv_enum(
+                "Cloud",
+                [(
+                    "provider",
+                    cv_enum(
+                        "Aws",
+                        [(
+                            "service",
+                            cv_enum("S3", [("action", cv_enum("Upload", []))]),
+                        )],
+                    ),
+                )],
+            ),
+        )]);
+
+        let path = cli_value.extract_subcommand_path("command");
+        assert_eq!(path, vec!["Cloud", "Aws", "S3", "Upload"]);
+    }
+
+    #[test]
+    fn test_extract_subcommand_path_no_subcommand() {
+        // No subcommand field
+        let cli_value = cv_object([("verbose", cv_bool(true))]);
+
+        let path = cli_value.extract_subcommand_path("command");
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_extract_subcommand_path_with_other_fields() {
+        // Simulates: myapp --verbose install foo
+        // Structure: { verbose: true, command: Enum("Install", { package: "foo" }) }
+        let cli_value = cv_object([
+            ("verbose", cv_bool(true)),
+            (
+                "command",
+                cv_enum("Install", [("package", cv_string("foo"))]),
+            ),
+        ]);
+
+        let path = cli_value.extract_subcommand_path("command");
+        assert_eq!(path, vec!["Install"]);
     }
 }

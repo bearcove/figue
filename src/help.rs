@@ -40,6 +40,188 @@ pub fn generate_help<T: facet_core::Facet<'static>>(config: &HelpConfig) -> Stri
     generate_help_for_shape(T::SHAPE, config)
 }
 
+/// Generate help text for a specific subcommand path.
+///
+/// `subcommand_path` is a list of variant names (e.g., `["Repo", "Clone"]` for `myapp repo clone --help`).
+/// This navigates through the type's shape to find the target subcommand and generates help for it.
+pub fn generate_help_for_subcommand(
+    shape: &'static Shape,
+    subcommand_path: &[String],
+    config: &HelpConfig,
+) -> String {
+    if subcommand_path.is_empty() {
+        return generate_help_for_shape(shape, config);
+    }
+
+    // Navigate to the subcommand variant
+    if let Some(variant) = find_subcommand_variant(shape, subcommand_path) {
+        generate_help_for_variant(&variant, config)
+    } else {
+        // Fallback to root help if we can't find the subcommand
+        generate_help_for_shape(shape, config)
+    }
+}
+
+/// Generate help for a specific subcommand variant.
+fn generate_help_for_variant(variant: &FoundVariant, config: &HelpConfig) -> String {
+    let mut out = String::new();
+
+    // Program name
+    let program_name = config
+        .program_name
+        .clone()
+        .or_else(|| std::env::args().next())
+        .unwrap_or_else(|| "program".to_string());
+
+    // Full command (e.g., "myapp repo clone")
+    let full_command = if variant.command_path.is_empty() {
+        program_name.clone()
+    } else {
+        format!("{} {}", program_name, variant.command_path.join(" "))
+    };
+
+    // Header with full command
+    out.push_str(&format!("{full_command}\n"));
+
+    // Doc comment for the variant/subcommand
+    if !variant.doc.is_empty() {
+        out.push('\n');
+        for line in variant.doc {
+            out.push_str(line.trim());
+            out.push('\n');
+        }
+    }
+
+    out.push('\n');
+
+    // Generate based on the variant's fields
+    // Collect flags, positionals, and nested subcommand from variant fields
+    let mut flags: Vec<&Field> = Vec::new();
+    let mut positionals: Vec<&Field> = Vec::new();
+    let mut subcommand: Option<&Field> = None;
+
+    collect_fields_recursive(
+        variant.fields,
+        &mut flags,
+        &mut positionals,
+        &mut subcommand,
+    );
+
+    generate_struct_help_inner(&mut out, &full_command, flags, positionals, subcommand);
+
+    out
+}
+
+/// Information about a found subcommand variant.
+struct FoundVariant {
+    /// The variant's fields (from data.fields)
+    fields: &'static [Field],
+    /// The variant's doc comment
+    doc: &'static [&'static str],
+    /// The command path for display (kebab-case)
+    command_path: Vec<String>,
+}
+
+/// Find a subcommand variant by navigating through the type hierarchy.
+/// Returns variant info for generating help.
+fn find_subcommand_variant(root_shape: &'static Shape, path: &[String]) -> Option<FoundVariant> {
+    if path.is_empty() {
+        return None;
+    }
+
+    let mut current_fields: &'static [Field] = match &root_shape.ty {
+        Type::User(UserType::Struct(st)) => st.fields,
+        _ => return None,
+    };
+    let mut command_path = Vec::new();
+    let mut last_variant: Option<&'static Variant> = None;
+
+    for variant_name in path {
+        // Find the subcommand field in current fields
+        let subcommand_field = current_fields
+            .iter()
+            .find(|f| f.has_attr(Some("args"), "subcommand"));
+
+        let Some(field) = subcommand_field else {
+            // No subcommand field - check if we already have a variant with nested subcommand
+            if let Some(v) = last_variant {
+                // Check the variant's fields for a subcommand
+                let nested_sub = v
+                    .data
+                    .fields
+                    .iter()
+                    .find(|f| f.has_attr(Some("args"), "subcommand"));
+                if let Some(nested_field) = nested_sub {
+                    // Get the enum shape
+                    let enum_shape = match nested_field.shape().def {
+                        Def::Option(opt) => opt.t,
+                        _ => nested_field.shape(),
+                    };
+
+                    // Find the variant
+                    if let Type::User(UserType::Enum(e)) = &enum_shape.ty
+                        && let Some(v2) = e.variants.iter().find(|v| v.name == variant_name)
+                    {
+                        command_path.push(v2.name.to_kebab_case());
+                        last_variant = Some(v2);
+                        current_fields = v2.data.fields;
+                        continue;
+                    }
+                }
+            }
+            return None;
+        };
+
+        // Get the enum shape (handling Option<Enum>)
+        let enum_shape = match field.shape().def {
+            Def::Option(opt) => opt.t,
+            _ => field.shape(),
+        };
+
+        // Find the variant in the enum
+        // The variant_name comes from CLI (kebab-case or renamed), so we need to match
+        // using effective_name() which handles renames
+        let variant = match &enum_shape.ty {
+            Type::User(UserType::Enum(e)) => {
+                trace!(
+                    "enum has variants: {:?}, looking for {:?}",
+                    e.variants
+                        .iter()
+                        .map(|v| v.effective_name())
+                        .collect::<Vec<_>>(),
+                    variant_name
+                );
+                e.variants
+                    .iter()
+                    .find(|v| v.effective_name() == *variant_name)
+            }
+            _ => {
+                trace!("not an enum type");
+                None
+            }
+        };
+
+        trace!("found variant = {:?}", variant.map(|v| v.name));
+
+        let Some(v) = variant else {
+            debug!("variant {:?} not found, returning None", variant_name);
+            return None;
+        };
+
+        // Add to command path (kebab-case for display)
+        command_path.push(v.name.to_kebab_case());
+
+        // Update for next iteration
+        last_variant = Some(v);
+        current_fields = v.data.fields;
+    }
+
+    last_variant.map(|v| FoundVariant {
+        fields: v.data.fields,
+        doc: v.doc,
+        command_path,
+    })
+}
 /// Generate help text for a shape.
 pub fn generate_help_for_shape(shape: &'static Shape, config: &HelpConfig) -> String {
     let mut out = String::new();
