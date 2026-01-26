@@ -473,7 +473,8 @@ impl<'a> FileParseContext<'a> {
                 key_path.push(key.clone());
 
                 if valid_paths.is_valid(&key_path) {
-                    // Valid key - recurse if it's an object
+                    // Valid key - validate enum values and recurse if it's an object
+                    self.validate_enum_value(val, &key_path);
                     if matches!(val, ConfigValue::Object(_)) {
                         self.validate_recursive(val, valid_paths, key_path);
                     }
@@ -496,6 +497,47 @@ impl<'a> FileParseContext<'a> {
         }
     }
 
+    /// Validate that a string value at an enum path is a valid variant.
+    fn validate_enum_value(&mut self, value: &ConfigValue, path: &[String]) {
+        // Only check string values - other types will be caught by deserialization
+        let string_value = match value {
+            ConfigValue::String(s) => &s.value,
+            _ => return,
+        };
+
+        // Get the schema for this path
+        let Some(config_schema) = self.config_schema else {
+            return;
+        };
+        let Some(value_schema) = config_schema.get_by_path(&path.to_vec()) else {
+            return;
+        };
+
+        // Unwrap Option wrapper if present
+        let inner_schema = match value_schema {
+            ConfigValueSchema::Option { value: inner, .. } => inner.as_ref(),
+            other => other,
+        };
+
+        // For enum fields, validate the value is a known variant
+        if let ConfigValueSchema::Enum(enum_schema) = inner_schema {
+            let variants = enum_schema.variants();
+            if !variants.contains_key(string_value) {
+                let valid_variants: Vec<&String> = variants.keys().collect();
+                self.emit_warning(format!(
+                    "unknown variant '{}' for {}. Valid variants are: {}",
+                    string_value,
+                    path.join("."),
+                    valid_variants
+                        .iter()
+                        .map(|v| format!("'{}'", v))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+
     fn emit_error(&mut self, message: String) {
         self.diagnostics.push(Diagnostic {
             message,
@@ -505,7 +547,6 @@ impl<'a> FileParseContext<'a> {
         });
     }
 
-    #[allow(dead_code)]
     fn emit_warning(&mut self, message: String) {
         self.diagnostics.push(Diagnostic {
             message,
@@ -1029,6 +1070,139 @@ mod tests {
                 .any(|k| k.key.contains(&"unknown_field".to_string())),
             "should detect unknown key: {:?}",
             result.output.unused_keys
+        );
+    }
+
+    // ========================================================================
+    // Tests: Schema-guided enum validation
+    // ========================================================================
+
+    /// Log level enum for testing enum validation
+    #[derive(Facet)]
+    #[repr(u8)]
+    #[allow(dead_code)]
+    enum LogLevel {
+        Debug,
+        Info,
+        Warn,
+        Error,
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithEnum {
+        log_level: LogLevel,
+        port: u16,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithEnumConfig {
+        #[facet(figue::config)]
+        config: ConfigWithEnum,
+    }
+
+    #[test]
+    fn test_enum_valid_variant_no_warning() {
+        // Valid variant should not produce a warning
+        let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
+        let config =
+            FileConfig::new().content(r#"{"log_level": "Debug", "port": 8080}"#, "config.json");
+
+        let result = parse_file(&schema, &config);
+
+        assert!(
+            result.output.diagnostics.is_empty(),
+            "valid enum variant should not produce warnings: {:?}",
+            result.output.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_enum_invalid_variant_produces_warning() {
+        // Invalid variant should produce a warning with helpful message
+        let schema = Schema::from_shape(ArgsWithEnumConfig::SHAPE).unwrap();
+        let config =
+            FileConfig::new().content(r#"{"log_level": "Debugg", "port": 8080}"#, "config.json"); // typo
+
+        let result = parse_file(&schema, &config);
+
+        // Should have a warning
+        assert!(
+            !result.output.diagnostics.is_empty(),
+            "invalid enum variant should produce a warning"
+        );
+
+        // Warning should mention the invalid value and valid variants
+        let warning = &result.output.diagnostics[0];
+        assert!(
+            warning.message.contains("Debugg"),
+            "warning should mention the invalid value: {}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("Debug")
+                && warning.message.contains("Info")
+                && warning.message.contains("Warn")
+                && warning.message.contains("Error"),
+            "warning should list valid variants: {}",
+            warning.message
+        );
+    }
+
+    #[derive(Facet)]
+    struct ConfigWithOptionalEnum {
+        log_level: Option<LogLevel>,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithOptionalEnumConfig {
+        #[facet(figue::config)]
+        config: ConfigWithOptionalEnum,
+    }
+
+    #[test]
+    fn test_optional_enum_validation() {
+        // Optional enum should also be validated
+        let schema = Schema::from_shape(ArgsWithOptionalEnumConfig::SHAPE).unwrap();
+        let config = FileConfig::new().content(r#"{"log_level": "invalid"}"#, "config.json");
+
+        let result = parse_file(&schema, &config);
+
+        // Should have a warning even for optional enum
+        assert!(
+            !result.output.diagnostics.is_empty(),
+            "invalid optional enum variant should produce a warning"
+        );
+    }
+
+    #[derive(Facet)]
+    struct NestedConfigWithEnum {
+        logging: LoggingConfig,
+    }
+
+    #[derive(Facet)]
+    struct LoggingConfig {
+        level: LogLevel,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithNestedEnumConfig {
+        #[facet(figue::config)]
+        config: NestedConfigWithEnum,
+    }
+
+    #[test]
+    fn test_nested_enum_validation() {
+        // Enum in nested struct should be validated
+        let schema = Schema::from_shape(ArgsWithNestedEnumConfig::SHAPE).unwrap();
+        let config =
+            FileConfig::new().content(r#"{"logging": {"level": "unknown"}}"#, "config.json");
+
+        let result = parse_file(&schema, &config);
+
+        // Should have a warning
+        assert!(
+            !result.output.diagnostics.is_empty(),
+            "invalid nested enum variant should produce a warning"
         );
     }
 }
