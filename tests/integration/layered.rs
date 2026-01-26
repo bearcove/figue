@@ -281,6 +281,7 @@ enum LogFormat {
 #[derive(Facet, Debug)]
 #[facet(rename_all = "kebab-case")]
 #[repr(u8)]
+#[allow(dead_code)]
 enum StorageBackend {
     /// Local filesystem storage
     Local {

@@ -160,20 +160,11 @@ impl EnvConfig {
 }
 
 /// Builder for environment variable configuration.
+#[derive(Default)]
 pub struct EnvConfigBuilder {
     prefix: String,
     strict: bool,
     source: Option<Box<dyn EnvSource>>,
-}
-
-impl Default for EnvConfigBuilder {
-    fn default() -> Self {
-        Self {
-            prefix: String::new(),
-            strict: false,
-            source: None,
-        }
-    }
 }
 
 impl EnvConfigBuilder {

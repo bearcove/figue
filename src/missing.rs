@@ -248,7 +248,7 @@ fn collect_missing_in_config_value(
                             if !is_optional {
                                 missing.push(MissingFieldInfo {
                                     field_name: field_name.to_string(),
-                                    field_path: field_path,
+                                    field_path,
                                     type_name: type_name_from_config_value_schema(
                                         field_schema.value(),
                                     ),
