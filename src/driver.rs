@@ -692,6 +692,7 @@ mod tests {
     use crate::FigueBuiltins;
     use crate::builder::builder;
     use facet::Facet;
+    use facet_testhelpers::test;
 
     /// Args struct with FigueBuiltins flattened in
     #[derive(Facet, Debug)]
@@ -1171,5 +1172,477 @@ mod tests {
             "deserialization should succeed: {:?}",
             result
         );
+    }
+
+    // ========================================================================
+    // More comprehensive builder API tests for issue #3
+    // ========================================================================
+
+    /// Nested subcommand enum (inner level)
+    #[derive(Facet, Debug, PartialEq)]
+    #[repr(u8)]
+    enum DatabaseAction {
+        /// Create a new migration
+        Create {
+            /// Migration name
+            #[facet(figue::positional)]
+            name: String,
+        },
+        /// Run pending migrations
+        Run {
+            /// Run in dry-run mode
+            #[facet(figue::named)]
+            dry_run: bool,
+        },
+        /// Rollback last migration
+        Rollback {
+            /// Number of migrations to rollback
+            #[facet(figue::named, default)]
+            count: Option<u32>,
+        },
+    }
+
+    /// Top-level command with nested subcommand
+    #[derive(Facet, Debug, PartialEq)]
+    #[repr(u8)]
+    enum TopLevelCommand {
+        /// Database management commands
+        Db {
+            #[facet(figue::subcommand)]
+            action: DatabaseAction,
+        },
+        /// Start the server
+        Serve {
+            /// Port to listen on
+            #[facet(figue::named, default)]
+            port: Option<u16>,
+            /// Host to bind to
+            #[facet(figue::named, default)]
+            host: Option<String>,
+        },
+        /// Show version info (unit variant)
+        Version,
+    }
+
+    /// Args with nested subcommands
+    #[derive(Facet, Debug)]
+    struct ArgsWithNestedSubcommands {
+        /// Global verbose flag
+        #[facet(figue::named, figue::short = 'v')]
+        verbose: bool,
+
+        #[facet(figue::subcommand)]
+        command: TopLevelCommand,
+
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    #[test]
+    fn test_builder_nested_subcommand_db_create() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["db", "create", "add_users_table"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => {
+                assert!(!output.value.verbose);
+                match &output.value.command {
+                    TopLevelCommand::Db { action } => match action {
+                        DatabaseAction::Create { name } => {
+                            assert_eq!(name, "add_users_table");
+                        }
+                        _ => panic!("expected Create action"),
+                    },
+                    _ => panic!("expected Db command"),
+                }
+            }
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_nested_subcommand_db_run_with_flag() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["-v", "db", "run", "--dry-run"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => {
+                assert!(output.value.verbose, "verbose should be true");
+                match &output.value.command {
+                    TopLevelCommand::Db { action } => match action {
+                        DatabaseAction::Run { dry_run } => {
+                            assert!(*dry_run, "dry_run should be true");
+                        }
+                        _ => panic!("expected Run action"),
+                    },
+                    _ => panic!("expected Db command"),
+                }
+            }
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_nested_subcommand_db_rollback_default() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["db", "rollback"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                TopLevelCommand::Db { action } => match action {
+                    DatabaseAction::Rollback { count } => {
+                        assert_eq!(*count, None, "count should default to None");
+                    }
+                    _ => panic!("expected Rollback action"),
+                },
+                _ => panic!("expected Db command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_nested_subcommand_db_rollback_with_count() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["db", "rollback", "--count", "3"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                TopLevelCommand::Db { action } => match action {
+                    DatabaseAction::Rollback { count } => {
+                        assert_eq!(*count, Some(3));
+                    }
+                    _ => panic!("expected Rollback action"),
+                },
+                _ => panic!("expected Db command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_serve_with_defaults() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["serve"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                TopLevelCommand::Serve { port, host } => {
+                    assert_eq!(*port, None);
+                    assert_eq!(*host, None);
+                }
+                _ => panic!("expected Serve command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_serve_with_options() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["serve", "--port", "8080", "--host", "0.0.0.0"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                TopLevelCommand::Serve { port, host } => {
+                    assert_eq!(*port, Some(8080));
+                    assert_eq!(host.as_deref(), Some("0.0.0.0"));
+                }
+                _ => panic!("expected Serve command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_unit_variant_subcommand() {
+        let config = builder::<ArgsWithNestedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["version"]))
+            .help(|h| h.program_name("test-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                TopLevelCommand::Version => {
+                    // Success - unit variant parsed correctly
+                }
+                _ => panic!("expected Version command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    /// Test tuple variant subcommands with the builder API
+    #[derive(Facet, Debug, PartialEq, Default)]
+    struct InstallOptions {
+        /// Install globally
+        #[facet(figue::named)]
+        global: bool,
+        /// Force reinstall
+        #[facet(figue::named)]
+        force: bool,
+    }
+
+    #[derive(Facet, Debug, PartialEq)]
+    #[repr(u8)]
+    enum PackageCommand {
+        /// Install a package (tuple variant with flattened struct)
+        Install(#[facet(flatten)] InstallOptions),
+        /// Uninstall a package
+        Uninstall {
+            /// Package name
+            #[facet(figue::positional)]
+            name: String,
+        },
+    }
+
+    #[derive(Facet, Debug)]
+    struct ArgsWithTupleVariant {
+        #[facet(figue::subcommand)]
+        command: PackageCommand,
+
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    #[test]
+    fn test_builder_tuple_variant_with_flatten() {
+        let config = builder::<ArgsWithTupleVariant>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["install", "--global", "--force"]))
+            .help(|h| h.program_name("pkg-manager"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                PackageCommand::Install(opts) => {
+                    assert!(opts.global, "global should be true");
+                    assert!(opts.force, "force should be true");
+                }
+                _ => panic!("expected Install command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_tuple_variant_defaults() {
+        let config = builder::<ArgsWithTupleVariant>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["install"]))
+            .help(|h| h.program_name("pkg-manager"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                PackageCommand::Install(opts) => {
+                    assert!(!opts.global, "global should default to false");
+                    assert!(!opts.force, "force should default to false");
+                }
+                _ => panic!("expected Install command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    /// Test renamed subcommand variants
+    #[derive(Facet, Debug, PartialEq)]
+    #[repr(u8)]
+    enum RenamedCommand {
+        /// List items (renamed to 'ls')
+        #[facet(rename = "ls")]
+        List {
+            /// Show all files
+            #[facet(figue::named, figue::short = 'a')]
+            all: bool,
+        },
+        /// Remove items (renamed to 'rm')
+        #[facet(rename = "rm")]
+        Remove {
+            /// Force removal
+            #[facet(figue::named, figue::short = 'f')]
+            force: bool,
+            /// Target path
+            #[facet(figue::positional)]
+            path: String,
+        },
+    }
+
+    #[derive(Facet, Debug)]
+    struct ArgsWithRenamedSubcommands {
+        #[facet(figue::subcommand)]
+        command: RenamedCommand,
+
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    #[test]
+    fn test_builder_renamed_subcommand_ls() {
+        let config = builder::<ArgsWithRenamedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["ls", "-a"]))
+            .help(|h| h.program_name("file-tool"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                RenamedCommand::List { all } => {
+                    assert!(*all, "all should be true");
+                }
+                _ => panic!("expected List command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_renamed_subcommand_rm() {
+        let config = builder::<ArgsWithRenamedSubcommands>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["rm", "-f", "/tmp/file.txt"]))
+            .help(|h| h.program_name("file-tool"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                RenamedCommand::Remove { force, path } => {
+                    assert!(*force, "force should be true");
+                    assert_eq!(path, "/tmp/file.txt");
+                }
+                _ => panic!("expected Remove command"),
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    /// Test deeply flattened structs within subcommands
+    #[derive(Facet, Debug, PartialEq, Default)]
+    struct LoggingOpts {
+        /// Enable debug logging
+        #[facet(figue::named)]
+        debug: bool,
+        /// Log to file
+        #[facet(figue::named, default)]
+        log_file: Option<String>,
+    }
+
+    #[derive(Facet, Debug, PartialEq, Default)]
+    struct CommonOpts {
+        /// Verbose output
+        #[facet(figue::named, figue::short = 'v')]
+        verbose: bool,
+        /// Quiet mode
+        #[facet(figue::named, figue::short = 'q')]
+        quiet: bool,
+        #[facet(flatten)]
+        logging: LoggingOpts,
+    }
+
+    #[derive(Facet, Debug, PartialEq)]
+    #[repr(u8)]
+    enum DeepCommand {
+        /// Run with common options
+        Execute {
+            #[facet(flatten)]
+            common: CommonOpts,
+            /// Target to execute
+            #[facet(figue::positional)]
+            target: String,
+        },
+    }
+
+    #[derive(Facet, Debug)]
+    struct ArgsWithDeepFlatten {
+        #[facet(figue::subcommand)]
+        command: DeepCommand,
+
+        #[facet(flatten)]
+        builtins: FigueBuiltins,
+    }
+
+    #[test]
+    fn test_builder_deep_flatten_all_flags() {
+        let config = builder::<ArgsWithDeepFlatten>()
+            .expect("failed to build schema")
+            .cli(|cli| {
+                cli.args([
+                    "execute",
+                    "-v",
+                    "--debug",
+                    "--log-file",
+                    "/var/log/app.log",
+                    "my-target",
+                ])
+            })
+            .help(|h| h.program_name("deep-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                DeepCommand::Execute { common, target } => {
+                    assert!(common.verbose, "verbose should be true");
+                    assert!(!common.quiet, "quiet should be false");
+                    assert!(common.logging.debug, "debug should be true");
+                    assert_eq!(common.logging.log_file.as_deref(), Some("/var/log/app.log"));
+                    assert_eq!(target, "my-target");
+                }
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_builder_deep_flatten_defaults() {
+        let config = builder::<ArgsWithDeepFlatten>()
+            .expect("failed to build schema")
+            .cli(|cli| cli.args(["execute", "simple-target"]))
+            .help(|h| h.program_name("deep-app"))
+            .build();
+
+        let result = Driver::new(config).run();
+        match result {
+            Ok(output) => match &output.value.command {
+                DeepCommand::Execute { common, target } => {
+                    assert!(!common.verbose);
+                    assert!(!common.quiet);
+                    assert!(!common.logging.debug);
+                    assert_eq!(common.logging.log_file, None);
+                    assert_eq!(target, "simple-target");
+                }
+            },
+            Err(e) => panic!("expected success: {:?}", e),
+        }
     }
 }

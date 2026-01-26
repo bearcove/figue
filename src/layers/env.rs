@@ -290,10 +290,12 @@ impl<'a> EnvParseContext<'a> {
         }
     }
 
-    /// Resolve an input path against the schema, returning the target path for insertion.
+    /// Resolve an input path against the schema, validating it exists.
     ///
-    /// For flattened fields, the input path uses the flattened field name (e.g., `["log_level"]`)
-    /// but we return the target_path for where to insert the value (e.g., `["common", "log_level"]`).
+    /// Returns the path to use for insertion (using the effective names from the schema).
+    /// The input path uses lowercase field names (from env var conversion), and this
+    /// validates they exist in the schema. The returned path uses the schema's field keys
+    /// (effective names after rename).
     fn resolve_path_in_schema(
         &self,
         schema: &ConfigStructSchema,
@@ -304,20 +306,19 @@ impl<'a> EnvParseContext<'a> {
         }
 
         let first = &path[0];
-        if let Some(field) = schema.fields().get(first) {
+        if let Some((effective_name, field)) = schema.fields().get_key_value(first) {
             if path.len() == 1 {
-                // Leaf field - return the target_path
-                return Some(field.target_path().to_vec());
+                // Leaf field - return the effective name
+                return Some(vec![effective_name.clone()]);
             }
             // Check nested
             match field.value() {
                 ConfigValueSchema::Struct(nested) => {
                     // Recurse into nested struct
-                    if let Some(mut nested_target) = self.resolve_path_in_schema(nested, &path[1..])
-                    {
-                        // Prepend the target_path for this field
-                        let mut result = field.target_path().to_vec();
-                        result.append(&mut nested_target);
+                    if let Some(mut nested_path) = self.resolve_path_in_schema(nested, &path[1..]) {
+                        // Prepend the effective name for this field
+                        let mut result = vec![effective_name.clone()];
+                        result.append(&mut nested_path);
                         Some(result)
                     } else {
                         None
@@ -326,11 +327,11 @@ impl<'a> EnvParseContext<'a> {
                 ConfigValueSchema::Option { value, .. } => {
                     // Unwrap option and check inner
                     if let ConfigValueSchema::Struct(nested) = value.as_ref() {
-                        if let Some(mut nested_target) =
+                        if let Some(mut nested_path) =
                             self.resolve_path_in_schema(nested, &path[1..])
                         {
-                            let mut result = field.target_path().to_vec();
-                            result.append(&mut nested_target);
+                            let mut result = vec![effective_name.clone()];
+                            result.append(&mut nested_path);
                             Some(result)
                         } else {
                             None
@@ -1049,8 +1050,8 @@ mod tests {
 
     #[test]
     fn test_flatten_config_parses_flattened_field() {
-        // With flatten, REEF__LOG_LEVEL (not REEF__COMMON__LOG_LEVEL) should set config.common.log_level
-        // The input is flattened (hoisted to parent), but the output follows target_path
+        // With flatten, REEF__LOG_LEVEL (not REEF__COMMON__LOG_LEVEL) sets log_level
+        // The schema hoists flattened fields to the parent level
         let schema = Schema::from_shape(ArgsWithFlattenConfig::SHAPE).unwrap();
         let env = MockEnv::from_pairs([("REEF__LOG_LEVEL", "debug")]);
         let config = env_config("REEF");
@@ -1069,9 +1070,8 @@ mod tests {
         );
 
         let value = output.value.expect("should have value");
-        // The value is placed at the target_path location for deserialization
-        let log_level = get_nested(&value, &["config", "common", "log_level"])
-            .expect("config.common.log_level");
+        // Flattened field appears at the flattened level, not nested
+        let log_level = get_nested(&value, &["config", "log_level"]).expect("config.log_level");
         assert_eq!(get_string(log_level), Some("debug"));
     }
 
@@ -1100,9 +1100,100 @@ mod tests {
         let port = get_nested(&value, &["config", "port"]).expect("config.port");
         assert_eq!(get_string(port), Some("8080"));
 
-        // debug is placed at target_path for deserialization
-        let debug =
-            get_nested(&value, &["config", "common", "debug"]).expect("config.common.debug");
+        // Flattened field appears at the flattened level
+        let debug = get_nested(&value, &["config", "debug"]).expect("config.debug");
         assert_eq!(get_string(debug), Some("true"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Two-level flatten tests
+    // ------------------------------------------------------------------------
+
+    #[derive(Facet)]
+    struct DeepConfig {
+        trace: bool,
+    }
+
+    #[derive(Facet)]
+    struct MiddleConfig {
+        #[facet(flatten)]
+        deep: DeepConfig,
+        verbose: bool,
+    }
+
+    #[derive(Facet)]
+    struct OuterConfigWithDeepFlatten {
+        name: String,
+        #[facet(flatten)]
+        middle: MiddleConfig,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithDeepFlattenConfig {
+        #[facet(crate::config)]
+        config: OuterConfigWithDeepFlatten,
+    }
+
+    #[test]
+    fn test_two_level_flatten_config() {
+        // trace is flattened from deep -> middle -> outer
+        // So REEF__TRACE should work (not REEF__MIDDLE__DEEP__TRACE)
+        let schema = Schema::from_shape(ArgsWithDeepFlattenConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([
+            ("REEF__NAME", "myapp"),
+            ("REEF__VERBOSE", "true"),
+            ("REEF__TRACE", "true"),
+        ]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            output.diagnostics
+        );
+        assert!(
+            output.unused_keys.is_empty(),
+            "unused keys: {:?}",
+            output.unused_keys
+        );
+
+        let value = output.value.expect("should have value");
+
+        // All fields appear at the top config level due to flattening
+        let name = get_nested(&value, &["config", "name"]).expect("config.name");
+        assert_eq!(get_string(name), Some("myapp"));
+
+        let verbose = get_nested(&value, &["config", "verbose"]).expect("config.verbose");
+        assert_eq!(get_string(verbose), Some("true"));
+
+        let trace = get_nested(&value, &["config", "trace"]).expect("config.trace");
+        assert_eq!(get_string(trace), Some("true"));
+    }
+
+    #[test]
+    fn test_nested_path_rejected_for_flattened_field() {
+        // REEF__COMMON__LOG_LEVEL should be rejected because "common" doesn't exist
+        // in the flattened schema (log_level is hoisted to the parent)
+        let schema = Schema::from_shape(ArgsWithFlattenConfig::SHAPE).unwrap();
+        let env = MockEnv::from_pairs([("REEF__COMMON__LOG_LEVEL", "debug")]);
+        let config = env_config("REEF");
+
+        let output = parse_env(&schema, &config, &env);
+
+        // Should have an unused key because "common" doesn't exist in schema
+        assert!(
+            !output.unused_keys.is_empty(),
+            "should reject nested path for flattened field"
+        );
+        assert!(
+            output
+                .unused_keys
+                .iter()
+                .any(|k| k.key.contains(&"common".to_string())),
+            "unused key should contain 'common': {:?}",
+            output.unused_keys
+        );
     }
 }

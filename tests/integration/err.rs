@@ -140,23 +140,6 @@ fn test_error_char_with_multiple_chars() {
 }
 
 #[test]
-fn test_error_nested_struct_with_scalar() {
-    #[derive(Facet, Debug)]
-    struct Config {
-        port: u16,
-    }
-
-    #[derive(Facet, Debug)]
-    struct Args {
-        #[facet(args::named)]
-        config: Config,
-    }
-    let args: Result<Args, _> = figue::from_slice(&["--config", "simple"]);
-    let err = args.unwrap_err();
-    assert_diag_snapshot!(err);
-}
-
-#[test]
 fn test_error_option_with_multiple_values() {
     #[derive(Facet, Debug)]
     struct Args {
@@ -165,22 +148,6 @@ fn test_error_option_with_multiple_values() {
     }
     // Try to provide a list where an Option is expected
     let args: Result<Args, _> = figue::from_slice(&["--maybe", "value1", "value2"]);
-    let err = args.unwrap_err();
-    assert_diag_snapshot!(err);
-}
-
-#[test]
-fn test_error_tuple_struct_field_access() {
-    #[derive(Facet, Debug)]
-    struct Point(u32, u32);
-
-    #[derive(Facet, Debug)]
-    struct Args {
-        #[facet(args::named)]
-        point: Point,
-    }
-    // Try to access tuple struct fields by name
-    let args: Result<Args, _> = figue::from_slice(&["--point.0", "10", "--point.1", "20"]);
     let err = args.unwrap_err();
     assert_diag_snapshot!(err);
 }
@@ -209,40 +176,6 @@ fn test_error_invalid_ip_address() {
     }
     // Provide an invalid IP address
     let args: Result<Args, _> = figue::from_slice(&["--address", "not-an-ip"]);
-    let err = args.unwrap_err();
-    assert_diag_snapshot!(err);
-}
-
-#[test]
-fn test_error_complex_nested_structure() {
-    #[derive(Facet, Debug)]
-    struct ServerConfig {
-        port: u16,
-        host: String,
-    }
-
-    #[derive(Facet, Debug)]
-    struct DatabaseConfig {
-        url: String,
-        pool_size: usize,
-    }
-
-    #[derive(Facet, Debug)]
-    struct AppConfig {
-        server: ServerConfig,
-        database: DatabaseConfig,
-    }
-
-    #[derive(Facet, Debug)]
-    struct Args {
-        #[facet(args::named)]
-        config: AppConfig,
-    }
-    // Try to flatten complex structure incorrectly
-    let args: Result<Args, _> = figue::from_slice(&[
-        "--config",
-        "{server={port=8080,host=localhost},database={url=postgresql://,pool_size=10}}",
-    ]);
     let err = args.unwrap_err();
     assert_diag_snapshot!(err);
 }

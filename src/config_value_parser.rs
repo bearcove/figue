@@ -102,6 +102,23 @@ fn fill_defaults_from_shape_recursive(
 
             let mut new_map = sourced.value.clone();
 
+            // Helper function to collect all flattened fields recursively
+            fn collect_flattened_fields<'a>(
+                fields: &'a [facet_core::Field],
+                result: &mut Vec<&'a facet_core::Field>,
+            ) {
+                for field in fields.iter() {
+                    if field.is_flattened() {
+                        let inner_shape = field.shape.get();
+                        if let Type::User(UserType::Struct(s)) = &inner_shape.ty {
+                            collect_flattened_fields(s.fields, result);
+                        }
+                    } else {
+                        result.push(field);
+                    }
+                }
+            }
+
             // For each field in the struct shape, check if it's missing in the ConfigValue
             for field in fields.iter() {
                 // Handle flattened fields: their inner fields should appear at the
@@ -114,8 +131,12 @@ fn fill_defaults_from_shape_recursive(
                         _ => continue, // Skip if not a struct (shouldn't happen for flatten)
                     };
 
+                    // Collect ALL flattened fields recursively (handles flatten inside flatten)
+                    let mut all_inner_fields = Vec::new();
+                    collect_flattened_fields(inner_fields, &mut all_inner_fields);
+
                     // For each inner field, add default if missing at the CURRENT level
-                    for inner_field in inner_fields.iter() {
+                    for inner_field in all_inner_fields {
                         if !new_map.contains_key(inner_field.name) {
                             let inner_path = if path_prefix.is_empty() {
                                 inner_field.name.to_string()
@@ -226,11 +247,11 @@ fn fill_defaults_from_shape_recursive(
                 _ => return value.clone(),
             };
 
-            // Find the variant by name
+            // Find the variant by name - check effective_name since that's what ConfigValue uses
             let variant = enum_type
                 .variants
                 .iter()
-                .find(|v| v.name == sourced.value.variant);
+                .find(|v| v.effective_name() == sourced.value.variant);
 
             let Some(variant) = variant else {
                 return value.clone();
@@ -244,10 +265,88 @@ fn fill_defaults_from_shape_recursive(
                 return value.clone();
             }
 
+            // Helper to check if a field should be treated as flattened
+            // This includes explicit #[facet(flatten)] AND tuple variant fields
+            // (tuple variants like Bench(BenchArgs) have a "0" field containing a struct)
+            let is_effectively_flattened = |field: &facet_core::Field| -> bool {
+                if field.is_flattened() {
+                    return true;
+                }
+                // Tuple variant: field name is a number and contains a struct
+                if field.name.chars().all(|c| c.is_ascii_digit())
+                    && let Type::User(UserType::Struct(_)) = &field.shape.get().ty
+                {
+                    return true;
+                }
+                false
+            };
+
             // Create a new fields map with defaults filled in
             let mut new_fields = sourced.value.fields.clone();
 
+            // Helper function to collect all flattened fields recursively
+            fn collect_flattened_fields_enum<'a>(
+                fields: &'a [facet_core::Field],
+                result: &mut Vec<&'a facet_core::Field>,
+                is_effectively_flattened: &impl Fn(&facet_core::Field) -> bool,
+            ) {
+                for field in fields.iter() {
+                    if is_effectively_flattened(field) {
+                        let inner_shape = field.shape.get();
+                        if let Type::User(UserType::Struct(s)) = &inner_shape.ty {
+                            collect_flattened_fields_enum(
+                                s.fields,
+                                result,
+                                is_effectively_flattened,
+                            );
+                        }
+                    } else if field.is_flattened() {
+                        // Regular flatten (not tuple variant)
+                        let inner_shape = field.shape.get();
+                        if let Type::User(UserType::Struct(s)) = &inner_shape.ty {
+                            collect_flattened_fields_enum(
+                                s.fields,
+                                result,
+                                is_effectively_flattened,
+                            );
+                        }
+                    } else {
+                        result.push(field);
+                    }
+                }
+            }
+
             for field in variant_fields.iter() {
+                // Handle flattened fields: their inner fields appear at the CURRENT level
+                if is_effectively_flattened(field) {
+                    let inner_shape = field.shape.get();
+                    if let Type::User(UserType::Struct(s)) = &inner_shape.ty {
+                        // Collect ALL flattened fields recursively
+                        let mut all_inner_fields = Vec::new();
+                        collect_flattened_fields_enum(
+                            s.fields,
+                            &mut all_inner_fields,
+                            &is_effectively_flattened,
+                        );
+
+                        for inner_field in all_inner_fields {
+                            if !new_fields.contains_key(inner_field.name) {
+                                let field_path = if path_prefix.is_empty() {
+                                    inner_field.name.to_string()
+                                } else {
+                                    format!("{}.{}", path_prefix, inner_field.name)
+                                };
+                                if let Some(default_value) =
+                                    get_default_config_value(inner_field, &field_path)
+                                {
+                                    new_fields.insert(inner_field.name.to_string(), default_value);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 if !new_fields.contains_key(field.name) {
                     let field_path = if path_prefix.is_empty() {
                         field.name.to_string()
@@ -262,13 +361,40 @@ fn fill_defaults_from_shape_recursive(
 
             // Recursively fill defaults in nested values
             for (key, val) in new_fields.iter_mut() {
-                if let Some(field) = variant_fields.iter().find(|f| f.name == key) {
+                // First check non-flattened fields
+                if let Some(field) = variant_fields
+                    .iter()
+                    .find(|f| f.name == key && !is_effectively_flattened(f))
+                {
                     let field_path = if path_prefix.is_empty() {
                         key.to_string()
                     } else {
                         format!("{}.{}", path_prefix, key)
                     };
                     *val = fill_defaults_from_shape_recursive(val, field.shape.get(), &field_path);
+                } else {
+                    // Check if key matches an inner field of a flattened struct
+                    for field in variant_fields
+                        .iter()
+                        .filter(|f| is_effectively_flattened(f))
+                    {
+                        let inner_shape = field.shape.get();
+                        if let Type::User(UserType::Struct(s)) = &inner_shape.ty
+                            && let Some(inner_field) = s.fields.iter().find(|f| f.name == key)
+                        {
+                            let field_path = if path_prefix.is_empty() {
+                                key.to_string()
+                            } else {
+                                format!("{}.{}", path_prefix, key)
+                            };
+                            *val = fill_defaults_from_shape_recursive(
+                                val,
+                                inner_field.shape.get(),
+                                &field_path,
+                            );
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -579,8 +705,10 @@ impl<'input> ConfigValueParser<'input> {
             "build_probe_evidence: starting"
         );
 
-        // Get the root value from the stack
-        let root_value = match self.stack.first() {
+        // Get the CURRENT value from the stack (top, not root).
+        // When deserializing nested structs, we need to probe the current position,
+        // not the root of the entire ConfigValue tree.
+        let current_value = match self.stack.last() {
             Some(StackFrame::Value(v)) => {
                 tracing::debug!("build_probe_evidence: found Value frame");
                 *v
@@ -614,7 +742,7 @@ impl<'input> ConfigValueParser<'input> {
         };
 
         // If it's an object, collect field evidence
-        match root_value {
+        match current_value {
             ConfigValue::Object(sourced) => {
                 tracing::debug!(
                     num_fields = sourced.value.len(),
@@ -1595,5 +1723,264 @@ mod tests {
 
         assert_eq!(config.name, "test");
         assert!(config.common.verbose);
+    }
+}
+
+#[cfg(test)]
+mod fill_defaults_tests {
+    use super::*;
+    use crate::config_value::Sourced;
+    use facet::Facet;
+
+    // Test 1: Simple struct with scalar defaults
+    #[derive(Facet, Debug)]
+    struct SimpleStruct {
+        #[facet(default)]
+        flag: bool,
+        #[facet(default)]
+        count: i64,
+    }
+
+    #[test]
+    fn test_fill_defaults_simple_struct() {
+        let input = ConfigValue::Object(Sourced::new(indexmap::IndexMap::default()));
+        let result = fill_defaults_from_shape(&input, SimpleStruct::SHAPE);
+
+        if let ConfigValue::Object(obj) = result {
+            assert!(obj.value.contains_key("flag"), "should have flag");
+            assert!(obj.value.contains_key("count"), "should have count");
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    // Test 2: Struct with flattened field
+    #[derive(Facet, Debug, Default)]
+    struct Inner {
+        #[facet(default)]
+        inner_flag: bool,
+    }
+
+    #[derive(Facet, Debug)]
+    struct StructWithFlatten {
+        #[facet(default)]
+        outer_flag: bool,
+        #[facet(flatten)]
+        inner: Inner,
+    }
+
+    #[test]
+    fn test_fill_defaults_flattened_struct() {
+        let input = ConfigValue::Object(Sourced::new(indexmap::IndexMap::default()));
+        let result = fill_defaults_from_shape(&input, StructWithFlatten::SHAPE);
+
+        if let ConfigValue::Object(obj) = result {
+            assert!(
+                obj.value.contains_key("outer_flag"),
+                "should have outer_flag at top level"
+            );
+            assert!(
+                obj.value.contains_key("inner_flag"),
+                "should have inner_flag at top level (flattened)"
+            );
+            assert!(
+                !obj.value.contains_key("inner"),
+                "should NOT have nested 'inner' object"
+            );
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    // Test 3: Enum with struct variant
+    #[derive(Facet, Debug)]
+    #[repr(u8)]
+    enum EnumWithStructVariant {
+        Variant {
+            #[facet(default)]
+            field: bool,
+        },
+    }
+
+    #[test]
+    fn test_fill_defaults_enum_struct_variant() {
+        let fields = indexmap::IndexMap::default();
+        let input = ConfigValue::Enum(Sourced::new(crate::config_value::EnumValue {
+            variant: "Variant".to_string(),
+            fields,
+        }));
+        let result = fill_defaults_from_shape(&input, EnumWithStructVariant::SHAPE);
+
+        if let ConfigValue::Enum(e) = result {
+            assert!(e.value.fields.contains_key("field"), "should have field");
+        } else {
+            panic!("expected enum");
+        }
+    }
+
+    // Test 4: Enum with tuple variant (like Bench(BenchArgs))
+    #[derive(Facet, Debug, Default)]
+    struct TuplePayload {
+        #[facet(default)]
+        payload_flag: bool,
+    }
+
+    #[derive(Facet, Debug)]
+    #[repr(u8)]
+    enum EnumWithTupleVariant {
+        TupleVar(TuplePayload),
+    }
+
+    #[test]
+    fn test_fill_defaults_enum_tuple_variant() {
+        // Tuple variant fields should be flattened - payload_flag at top level, not under "0"
+        let fields = indexmap::IndexMap::default();
+        let input = ConfigValue::Enum(Sourced::new(crate::config_value::EnumValue {
+            variant: "TupleVar".to_string(),
+            fields,
+        }));
+        let result = fill_defaults_from_shape(&input, EnumWithTupleVariant::SHAPE);
+
+        if let ConfigValue::Enum(e) = result {
+            assert!(
+                e.value.fields.contains_key("payload_flag"),
+                "should have payload_flag at top level"
+            );
+            assert!(
+                !e.value.fields.contains_key("0"),
+                "should NOT have '0' wrapper"
+            );
+        } else {
+            panic!("expected enum");
+        }
+    }
+
+    // Test 5: Enum with flattened field inside variant
+    #[derive(Facet, Debug, Default)]
+    struct FlattenedOpts {
+        #[facet(default)]
+        opt_a: bool,
+        #[facet(default)]
+        opt_b: bool,
+    }
+
+    #[derive(Facet, Debug)]
+    #[repr(u8)]
+    enum EnumWithFlattenInVariant {
+        Cmd {
+            #[facet(flatten)]
+            opts: FlattenedOpts,
+            #[facet(default)]
+            other: bool,
+        },
+    }
+
+    #[test]
+    fn test_fill_defaults_enum_flatten_in_variant() {
+        let fields = indexmap::IndexMap::default();
+        let input = ConfigValue::Enum(Sourced::new(crate::config_value::EnumValue {
+            variant: "Cmd".to_string(),
+            fields,
+        }));
+        let result = fill_defaults_from_shape(&input, EnumWithFlattenInVariant::SHAPE);
+
+        if let ConfigValue::Enum(e) = result {
+            assert!(
+                e.value.fields.contains_key("opt_a"),
+                "should have opt_a (flattened)"
+            );
+            assert!(
+                e.value.fields.contains_key("opt_b"),
+                "should have opt_b (flattened)"
+            );
+            assert!(e.value.fields.contains_key("other"), "should have other");
+            assert!(
+                !e.value.fields.contains_key("opts"),
+                "should NOT have 'opts' wrapper"
+            );
+        } else {
+            panic!("expected enum");
+        }
+    }
+
+    // Test 6: Deep flatten - flatten inside flatten
+    #[derive(Facet, Debug, Default)]
+    struct DeepInner {
+        #[facet(default)]
+        deep_flag: bool,
+    }
+
+    #[derive(Facet, Debug, Default)]
+    struct MiddleLayer {
+        #[facet(default)]
+        middle_flag: bool,
+        #[facet(flatten)]
+        deep: DeepInner,
+    }
+
+    #[derive(Facet, Debug)]
+    struct DeepFlattenStruct {
+        #[facet(default)]
+        top_flag: bool,
+        #[facet(flatten)]
+        middle: MiddleLayer,
+    }
+
+    #[test]
+    fn test_fill_defaults_deep_flatten() {
+        let input = ConfigValue::Object(Sourced::new(indexmap::IndexMap::default()));
+        let result = fill_defaults_from_shape(&input, DeepFlattenStruct::SHAPE);
+
+        if let ConfigValue::Object(obj) = result {
+            eprintln!("Result keys: {:?}", obj.value.keys().collect::<Vec<_>>());
+            assert!(obj.value.contains_key("top_flag"), "should have top_flag");
+            assert!(
+                obj.value.contains_key("middle_flag"),
+                "should have middle_flag (flattened)"
+            );
+            assert!(
+                obj.value.contains_key("deep_flag"),
+                "should have deep_flag (double flattened)"
+            );
+            assert!(
+                !obj.value.contains_key("middle"),
+                "should NOT have 'middle' wrapper"
+            );
+            assert!(
+                !obj.value.contains_key("deep"),
+                "should NOT have 'deep' wrapper"
+            );
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    // Test 7: Renamed enum variant
+    #[derive(Facet, Debug)]
+    #[repr(u8)]
+    enum RenamedVariantEnum {
+        #[facet(rename = "ls")]
+        List {
+            #[facet(default)]
+            all: bool,
+        },
+    }
+
+    #[test]
+    fn test_fill_defaults_renamed_variant() {
+        // ConfigValue uses effective name "ls", not "List"
+        let fields = indexmap::IndexMap::default();
+        let input = ConfigValue::Enum(Sourced::new(crate::config_value::EnumValue {
+            variant: "ls".to_string(), // effective name
+            fields,
+        }));
+        let result = fill_defaults_from_shape(&input, RenamedVariantEnum::SHAPE);
+
+        if let ConfigValue::Enum(e) = result {
+            assert_eq!(e.value.variant, "ls", "variant name should be preserved");
+            assert!(e.value.fields.contains_key("all"), "should have all field");
+        } else {
+            panic!("expected enum");
+        }
     }
 }

@@ -1,19 +1,39 @@
 //! Schema-driven CLI argument parser that outputs ConfigValue with provenance.
 //!
-//! This module is under active development and not yet wired into the main API.
-#![allow(dead_code)]
+//! # ConfigValue Model
+//!
+//! This parser produces ConfigValue trees that follow these rules:
+//!
+//! 1. **Effective names**: All field names in ConfigValue are the *serialized* names
+//!    (after `#[facet(rename = "...")]`), not the original Rust field names.
+//!    Example: if a field is `#[facet(rename = "cores")] concurrency: i64`,
+//!    the ConfigValue key is `"cores"`, not `"concurrency"`.
+//!
+//! 2. **Flat structure for flatten**: Flattened fields appear at the CURRENT level,
+//!    not nested under the flattened field name. Example: if `FigueBuiltins` has
+//!    `help` and `version` fields, they appear as top-level keys, not under `"builtins"`.
+//!
+//! 3. **No "0" wrapper for flattened tuple variants**: For tuple variants like
+//!    `Install(#[facet(flatten)] InstallOptions)`, the inner struct's fields appear
+//!    directly in the variant's fields, NOT wrapped in a `"0"` key.
+//!
+//! The deserializer (facet-format) expects this flat structure and handles routing
+//! fields to their correct nested locations based on the type's Shape.
+//!
+//! # Architecture
 //!
 //! This parser:
 //! - Uses the pre-built Schema (not raw attribute lookups)
 //! - Outputs LayerOutput (ConfigValue + diagnostics), not a Partial
 //! - Does NOT set defaults (that's the driver's job)
 //! - Reports errors properly (no silent skipping)
+#![allow(dead_code)]
 
 use std::hash::RandomState;
 use std::string::{String, ToString};
 use std::vec::Vec;
 
-use heck::{ToKebabCase, ToSnakeCase};
+use heck::ToKebabCase;
 use indexmap::IndexMap;
 
 use crate::config_value::{ConfigValue, EnumValue, Sourced};
@@ -109,8 +129,40 @@ pub fn parse_cli(schema: &Schema, cli_config: &CliConfig) -> LayerOutput {
 struct CountedAccumulator {
     /// Number of times the flag was seen.
     count: u64,
-    /// Target path for inserting the value (from schema).
-    target_path: Vec<String>,
+}
+
+/// A parent level in the parse stack for the adoption agency algorithm.
+/// When a flag isn't found at the current subcommand level, we search
+/// parent levels and store the value in the appropriate parent's result map.
+struct ParentLevel<'a> {
+    /// The argument schema for this level
+    args: &'a ArgLevelSchema,
+    /// The result map for this level (values parsed at this level go here)
+    result: IndexMap<String, ConfigValue, RandomState>,
+    /// Counted flag accumulators for this level
+    counted: IndexMap<String, CountedAccumulator, RandomState>,
+}
+
+/// Target for inserting parsed values - either the current level or a parent level.
+#[derive(Clone, Copy)]
+enum InsertTarget {
+    /// Insert into the current level's result map
+    Current,
+    /// Insert into a parent level's result map (adoption agency)
+    Parent(usize),
+}
+
+/// Result of looking up a flag in parent levels.
+/// Contains owned/copied data to avoid borrow conflicts.
+struct ParentFlagLookup {
+    /// Index into parent_stack
+    parent_idx: usize,
+    /// Effective name of the argument (owned to avoid borrow)
+    effective_name: String,
+    /// Whether this is a bool flag
+    is_bool: bool,
+    /// Whether this is a counted flag
+    is_counted: bool,
 }
 
 /// Parser context holding state during CLI parsing.
@@ -127,12 +179,15 @@ struct ParseContext<'a> {
     diagnostics: Vec<Diagnostic>,
     /// Whether we've seen `--` (positional-only mode)
     positional_only: bool,
-    /// Counted flag accumulators: field_name -> accumulator with target_path
+    /// Counted flag accumulators: field_name -> accumulator
     counted: IndexMap<String, CountedAccumulator, RandomState>,
     /// Whether to error on unknown arguments
     strict: bool,
     /// Byte offset where each argument starts in the flattened string (args joined by spaces)
     arg_offsets: Vec<usize>,
+    /// Stack of parent levels for the adoption agency algorithm.
+    /// When parsing a subcommand, parent levels are pushed here so flags can bubble up.
+    parent_stack: Vec<ParentLevel<'a>>,
 }
 
 impl<'a> ParseContext<'a> {
@@ -160,6 +215,7 @@ impl<'a> ParseContext<'a> {
             counted: IndexMap::default(),
             strict,
             arg_offsets,
+            parent_stack: Vec::new(),
         }
     }
 
@@ -187,7 +243,7 @@ impl<'a> ParseContext<'a> {
         self.apply_counted_fields();
     }
 
-    fn parse_level(&mut self, level: &ArgLevelSchema) {
+    fn parse_level(&mut self, level: &'a ArgLevelSchema) {
         while self.index < self.args.len() {
             let arg = self.args[self.index];
 
@@ -250,17 +306,32 @@ impl<'a> ParseContext<'a> {
             return;
         }
 
-        // Look up in schema
-        let flag_snake = flag_name.to_snake_case();
-        if let Some(arg_schema) = level.args().get(&flag_snake) {
+        // Look up in schema - Args::get converts schema keys to kebab-case for comparison
+        // and returns the original effective_name for storage in ConfigValue
+        if let Some((effective_name, arg_schema)) = level.args().get(flag_name) {
             if let ArgKind::Named { counted, .. } = arg_schema.kind()
                 && *counted
             {
-                self.increment_counted(&flag_snake, arg_schema.target_path());
+                self.increment_counted(effective_name);
                 self.index += 1;
                 return;
             }
-            self.parse_flag_value(arg, &flag_snake, arg_schema, inline_value);
+            self.parse_flag_value(arg, effective_name, arg_schema, inline_value);
+        } else if let Some(lookup) = self.find_long_flag_in_parents(flag_name) {
+            // Adoption agency: flag found in parent level, bubble up
+            let target = InsertTarget::Parent(lookup.parent_idx);
+            if lookup.is_counted {
+                self.increment_counted_to(target, &lookup.effective_name);
+                self.index += 1;
+                return;
+            }
+            self.parse_flag_value_simple(
+                arg,
+                target,
+                &lookup.effective_name,
+                lookup.is_bool,
+                inline_value,
+            );
         } else {
             self.emit_error(format!("unknown flag: --{}", flag_name));
             self.index += 1;
@@ -288,7 +359,7 @@ impl<'a> ParseContext<'a> {
         let chars: Vec<char> = flag_part.chars().collect();
 
         for (i, ch) in chars.iter().enumerate() {
-            // Find argument with this short flag
+            // Find argument with this short flag at current level
             let found = level.args().iter().find(|(_, schema)| {
                 if let ArgKind::Named { short: Some(s), .. } = schema.kind() {
                     *s == *ch
@@ -297,56 +368,68 @@ impl<'a> ParseContext<'a> {
                 }
             });
 
-            if let Some((name, arg_schema)) = found {
-                if let ArgKind::Named { counted, .. } = arg_schema.kind()
-                    && *counted
-                {
-                    self.increment_counted(name, arg_schema.target_path());
-                    continue;
-                }
-
+            // Determine target and flag info
+            let (target, name, is_bool, is_counted) = if let Some((name, arg_schema)) = found {
+                let is_counted = matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
                 let is_bool = arg_schema
                     .value()
                     .inner_if_option()
                     .is_bool_or_vec_of_bool();
-                let is_last = i == chars.len() - 1;
-
-                if is_bool {
-                    // Bool flag: set to true
-                    let prov = Provenance::cli(format!("-{}", ch), "true");
-                    self.insert_at_path(
-                        arg_schema.target_path(),
-                        ConfigValue::Bool(Sourced {
-                            value: true,
-                            span: None,
-                            provenance: Some(prov),
-                        }),
-                    );
-                } else if is_last {
-                    // Non-bool flag at end: look for value
-                    let flag_span = self.current_span(); // Save span before incrementing
-                    self.index += 1;
-                    if self.index < self.args.len() {
-                        let value_span = self.current_span();
-                        let value_str = self.args[self.index];
-                        let prov_arg = format!("-{}", ch);
-                        let value = self.parse_value_string(value_str, &prov_arg, value_span);
-                        self.insert_at_path(arg_schema.target_path(), value);
-                    } else {
-                        self.emit_error_at(format!("flag -{} requires a value", ch), flag_span);
-                    }
-                } else {
-                    // Non-bool flag with attached value: -p8080
-                    // Span for attached value is within the current arg
-                    let rest: String = chars[i + 1..].iter().collect();
-                    let value_span = self.span_within_current(i + 1, rest.len());
-                    let prov_arg = format!("-{}", ch);
-                    let value = self.parse_value_string(&rest, &prov_arg, value_span);
-                    self.insert_at_path(arg_schema.target_path(), value);
-                    break; // Consumed rest of chars
-                }
+                (InsertTarget::Current, name.to_string(), is_bool, is_counted)
+            } else if let Some(lookup) = self.find_short_flag_in_parents(*ch) {
+                // Adoption agency: flag found in parent level
+                (
+                    InsertTarget::Parent(lookup.parent_idx),
+                    lookup.effective_name,
+                    lookup.is_bool,
+                    lookup.is_counted,
+                )
             } else {
                 self.emit_error(format!("unknown flag: -{}", ch));
+                continue;
+            };
+
+            if is_counted {
+                self.increment_counted_to(target, &name);
+                continue;
+            }
+
+            let is_last = i == chars.len() - 1;
+
+            if is_bool {
+                // Bool flag: set to true
+                let prov = Provenance::cli(format!("-{}", ch), "true");
+                self.insert_value_to(
+                    target,
+                    &name,
+                    ConfigValue::Bool(Sourced {
+                        value: true,
+                        span: None,
+                        provenance: Some(prov),
+                    }),
+                );
+            } else if is_last {
+                // Non-bool flag at end: look for value
+                let flag_span = self.current_span(); // Save span before incrementing
+                self.index += 1;
+                if self.index < self.args.len() {
+                    let value_span = self.current_span();
+                    let value_str = self.args[self.index];
+                    let prov_arg = format!("-{}", ch);
+                    let value = self.parse_value_string(value_str, &prov_arg, value_span);
+                    self.insert_value_to(target, &name, value);
+                } else {
+                    self.emit_error_at(format!("flag -{} requires a value", ch), flag_span);
+                }
+            } else {
+                // Non-bool flag with attached value: -p8080
+                // Span for attached value is within the current arg
+                let rest: String = chars[i + 1..].iter().collect();
+                let value_span = self.span_within_current(i + 1, rest.len());
+                let prov_arg = format!("-{}", ch);
+                let value = self.parse_value_string(&rest, &prov_arg, value_span);
+                self.insert_value_to(target, &name, value);
+                break; // Consumed rest of chars
             }
         }
         self.index += 1;
@@ -362,52 +445,75 @@ impl<'a> ParseContext<'a> {
             }
         });
 
-        if let Some((name, arg_schema)) = found {
-            if let ArgKind::Named { counted, .. } = arg_schema.kind()
-                && *counted
-            {
-                self.increment_counted(name, arg_schema.target_path());
-                return;
-            }
-
+        // Determine target and flag info
+        let (target, name, is_bool, is_counted) = if let Some((name, arg_schema)) = found {
+            let is_counted = matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
             let is_bool = arg_schema.value().inner_if_option().is_bool();
-            let prov_arg = format!("-{}", ch);
-
-            if is_bool {
-                // --flag=true or --flag=false
-                let value = matches!(
-                    value_str.to_lowercase().as_str(),
-                    "true" | "yes" | "1" | "on" | ""
-                );
-                let prov = Provenance::cli(&prov_arg, value.to_string());
-                self.insert_at_path(
-                    arg_schema.target_path(),
-                    ConfigValue::Bool(Sourced {
-                        value,
-                        span: None,
-                        provenance: Some(prov),
-                    }),
-                );
-            } else {
-                // Value starts after the '=' which is at position 2 (after -k)
-                let value_span = self.span_within_current(3, value_str.len());
-                let value = self.parse_value_string(value_str, &prov_arg, value_span);
-                self.insert_at_path(arg_schema.target_path(), value);
-            }
+            (InsertTarget::Current, name.to_string(), is_bool, is_counted)
+        } else if let Some(lookup) = self.find_short_flag_in_parents(ch) {
+            // Adoption agency: flag found in parent level
+            (
+                InsertTarget::Parent(lookup.parent_idx),
+                lookup.effective_name,
+                lookup.is_bool,
+                lookup.is_counted,
+            )
         } else {
             self.emit_error(format!("unknown flag: -{}", ch));
+            return;
+        };
+
+        if is_counted {
+            self.increment_counted_to(target, &name);
+            return;
+        }
+
+        let prov_arg = format!("-{}", ch);
+
+        if is_bool {
+            // -k=true or -k=false
+            let value = matches!(
+                value_str.to_lowercase().as_str(),
+                "true" | "yes" | "1" | "on" | ""
+            );
+            let prov = Provenance::cli(&prov_arg, value.to_string());
+            self.insert_value_to(
+                target,
+                &name,
+                ConfigValue::Bool(Sourced {
+                    value,
+                    span: None,
+                    provenance: Some(prov),
+                }),
+            );
+        } else {
+            // Value starts after the '=' which is at position 2 (after -k)
+            let value_span = self.span_within_current(3, value_str.len());
+            let value = self.parse_value_string(value_str, &prov_arg, value_span);
+            self.insert_value_to(target, &name, value);
         }
     }
 
     fn parse_flag_value(
         &mut self,
         arg: &str,
-        _name: &str,
+        name: &str,
         schema: &ArgSchema,
         inline_value: Option<&str>,
     ) {
         let is_bool = schema.value().inner_if_option().is_bool();
+        self.parse_flag_value_simple(arg, InsertTarget::Current, name, is_bool, inline_value);
+    }
 
+    /// Parse a flag value with explicit is_bool (avoids borrow issues with schema).
+    fn parse_flag_value_simple(
+        &mut self,
+        arg: &str,
+        target: InsertTarget,
+        name: &str,
+        is_bool: bool,
+        inline_value: Option<&str>,
+    ) {
         if is_bool {
             // Bool flag: presence means true
             let value = if let Some(v) = inline_value {
@@ -417,8 +523,9 @@ impl<'a> ParseContext<'a> {
                 true
             };
             let prov = Provenance::cli(arg, value.to_string());
-            self.insert_at_path(
-                schema.target_path(),
+            self.insert_value_to(
+                target,
+                name,
                 ConfigValue::Bool(Sourced {
                     value,
                     span: None,
@@ -428,7 +535,7 @@ impl<'a> ParseContext<'a> {
             self.index += 1;
         } else {
             // Non-bool: need a value
-            let flag_span = self.current_span(); // Save span before incrementing
+            let flag_span = self.current_span();
             let (value_str, value_span) = if let Some(v) = inline_value {
                 // --flag=value: value starts after the '='
                 let eq_pos = arg.find('=').unwrap_or(0) + 1;
@@ -450,7 +557,7 @@ impl<'a> ParseContext<'a> {
 
             let prov_arg = arg.split('=').next().unwrap_or(arg);
             let value = self.parse_value_string(value_str, prov_arg, value_span);
-            self.insert_at_path(schema.target_path(), value);
+            self.insert_value_to(target, name, value);
         }
     }
 
@@ -511,35 +618,34 @@ impl<'a> ParseContext<'a> {
         }
     }
 
-    fn try_parse_subcommand(&mut self, level: &ArgLevelSchema) -> bool {
+    fn try_parse_subcommand(&mut self, level: &'a ArgLevelSchema) -> bool {
         let Some(field_name) = level.subcommand_field_name() else {
             return false;
         };
 
         let arg = self.args[self.index];
-        let arg_kebab = arg.to_kebab_case();
 
-        if let Some(subcommand) = level.subcommands().get(&arg_kebab) {
+        // Find subcommand by comparing user input with kebab-case of effective_name
+        let subcommand = level
+            .subcommands()
+            .iter()
+            .find(|(name, _)| name.to_kebab_case() == arg);
+
+        if let Some((_, subcommand)) = subcommand {
             self.index += 1;
-            let mut fields = self.parse_subcommand_args(subcommand);
+            let fields = self.parse_subcommand_args(level, subcommand);
 
-            // For flattened tuple variants like `Bench(BenchArgs)`, wrap the fields
-            // in a "0" field since facet expects tuple field positions as keys.
-            if subcommand.is_flattened_tuple() {
-                let inner_fields = core::mem::take(&mut fields);
-                let inner_object = ConfigValue::Object(Sourced {
-                    value: inner_fields,
-                    span: None,
-                    provenance: None,
-                });
-                fields.insert("0".to_string(), inner_object);
-            }
+            // For flattened tuple variants like `Install(#[facet(flatten)] InstallOptions)`,
+            // the fields are already flat (they came from the inner struct's schema).
+            // We do NOT wrap them in a "0" key - the deserializer handles the routing.
+            // See module-level docs for the ConfigValue model.
+            let _ = subcommand.is_flattened_tuple(); // Acknowledge the flag exists but don't use it here
 
-            // Use the original Rust variant name for deserialization
-            // (facet-format expects "Build", not "build")
+            // Use the effective name (rename or original) for deserialization
+            // facet-format matches against effective names, not original Rust names
             let enum_value = ConfigValue::Enum(Sourced {
                 value: EnumValue {
-                    variant: subcommand.variant_name().to_string(),
+                    variant: subcommand.name().to_string(),
                     fields,
                 },
                 span: None,
@@ -555,40 +661,116 @@ impl<'a> ParseContext<'a> {
 
     fn parse_subcommand_args(
         &mut self,
-        subcommand: &Subcommand,
+        parent_level: &'a ArgLevelSchema,
+        subcommand: &'a Subcommand,
     ) -> IndexMap<String, ConfigValue, RandomState> {
-        // Save current state
-        let old_result = core::mem::take(&mut self.result);
-        let old_counted = core::mem::take(&mut self.counted);
+        // Push current level onto parent stack for adoption agency algorithm.
+        // This allows flags not found in the subcommand to bubble up to parent levels.
+        let parent = ParentLevel {
+            args: parent_level,
+            result: core::mem::take(&mut self.result),
+            counted: core::mem::take(&mut self.counted),
+        };
+        self.parent_stack.push(parent);
 
         // Parse subcommand arguments
         self.parse_level(subcommand.args());
         self.apply_counted_fields();
 
-        // Restore and return
-        let subcommand_result = core::mem::replace(&mut self.result, old_result);
-        self.counted = old_counted;
+        // Pop parent level and restore state
+        let mut parent = self
+            .parent_stack
+            .pop()
+            .expect("parent stack should not be empty");
+
+        // Any values that were "adopted" by the parent during subcommand parsing
+        // are now in parent.result. Restore them to self.result.
+        let subcommand_result = core::mem::replace(&mut self.result, parent.result);
+
+        // Also apply any counted fields that bubbled up to the parent
+        self.apply_counted_from(&mut parent.counted);
 
         subcommand_result
+    }
+
+    /// Apply counted accumulators from another map (used for adoption agency).
+    fn apply_counted_from(
+        &mut self,
+        counted: &mut IndexMap<String, CountedAccumulator, RandomState>,
+    ) {
+        for (name, acc) in counted.drain(..) {
+            let prov =
+                Provenance::cli(format!("-{} (x{})", name, acc.count), acc.count.to_string());
+            self.result.insert(
+                name,
+                ConfigValue::Integer(Sourced {
+                    value: acc.count as i64,
+                    span: None,
+                    provenance: Some(prov),
+                }),
+            );
+        }
+    }
+
+    /// Look up a long flag in parent levels (adoption agency algorithm).
+    /// Returns owned data to avoid borrow conflicts during mutation.
+    fn find_long_flag_in_parents(&self, flag_name: &str) -> Option<ParentFlagLookup> {
+        // Search parent stack from innermost (most recent) to outermost
+        for (idx, parent) in self.parent_stack.iter().enumerate().rev() {
+            if let Some((effective_name, arg_schema)) = parent.args.args().get(flag_name) {
+                let is_counted = matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
+                let is_bool = arg_schema.value().inner_if_option().is_bool();
+                return Some(ParentFlagLookup {
+                    parent_idx: idx,
+                    effective_name: effective_name.to_string(),
+                    is_bool,
+                    is_counted,
+                });
+            }
+        }
+        None
+    }
+
+    /// Look up a short flag in parent levels (adoption agency algorithm).
+    /// Returns owned data to avoid borrow conflicts during mutation.
+    fn find_short_flag_in_parents(&self, ch: char) -> Option<ParentFlagLookup> {
+        // Search parent stack from innermost (most recent) to outermost
+        for (idx, parent) in self.parent_stack.iter().enumerate().rev() {
+            for (name, schema) in parent.args.args().iter() {
+                if let ArgKind::Named { short: Some(s), .. } = schema.kind()
+                    && *s == ch
+                {
+                    let is_counted = matches!(schema.kind(), ArgKind::Named { counted: true, .. });
+                    let is_bool = schema.value().inner_if_option().is_bool();
+                    return Some(ParentFlagLookup {
+                        parent_idx: idx,
+                        effective_name: name.to_string(),
+                        is_bool,
+                        is_counted,
+                    });
+                }
+            }
+        }
+        None
     }
 
     fn try_parse_positional(&mut self, level: &ArgLevelSchema) -> bool {
         let arg = self.args[self.index];
 
         // Find the next unset positional argument
-        for (_name, schema) in level.args() {
+        for (name, schema) in level.args() {
             if !matches!(schema.kind(), ArgKind::Positional) {
                 continue;
             }
 
             // Check if already set (unless it's multiple/list)
-            if self.has_value_at_path(schema.target_path()) && !schema.multiple() {
+            if self.has_value(name) && !schema.multiple() {
                 continue;
             }
 
             let value_span = self.current_span();
             let value = self.parse_value_string(arg, arg, value_span);
-            self.insert_at_path(schema.target_path(), value);
+            self.insert_value(name, value);
             self.index += 1;
             return true;
         }
@@ -613,35 +795,68 @@ impl<'a> ParseContext<'a> {
         })
     }
 
-    /// Insert a value at the given target path.
-    fn insert_at_path(&mut self, target_path: &[String], value: ConfigValue) {
-        let path_refs: Vec<&str> = target_path.iter().map(|s| s.as_str()).collect();
-        insert_nested(&mut self.result, &path_refs, value);
+    /// Insert a value at the arg's effective name (flat, not nested).
+    /// For repeated flags (Vec fields), accumulates values into an array.
+    fn insert_value(&mut self, name: &str, value: ConfigValue) {
+        self.insert_value_to(InsertTarget::Current, name, value);
     }
 
-    /// Check if a value exists at the given target path.
-    fn has_value_at_path(&self, target_path: &[String]) -> bool {
-        let mut current: &IndexMap<String, ConfigValue, RandomState> = &self.result;
-        for (i, key) in target_path.iter().enumerate() {
-            match current.get(key) {
-                Some(ConfigValue::Object(sourced)) if i < target_path.len() - 1 => {
-                    current = &sourced.value;
+    /// Insert a value to a specific target (current level or parent level).
+    fn insert_value_to(&mut self, target: InsertTarget, name: &str, value: ConfigValue) {
+        let result_map = match target {
+            InsertTarget::Current => &mut self.result,
+            InsertTarget::Parent(idx) => &mut self.parent_stack[idx].result,
+        };
+
+        match result_map.entry(name.to_string()) {
+            indexmap::map::Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+            indexmap::map::Entry::Occupied(mut entry) => {
+                // Accumulate into array for repeated flags
+                let existing = entry.get_mut();
+                if let ConfigValue::Array(arr) = existing {
+                    arr.value.push(value);
+                } else {
+                    // Convert to array with both values
+                    let placeholder = ConfigValue::Null(Sourced {
+                        value: (),
+                        span: None,
+                        provenance: None,
+                    });
+                    let old = core::mem::replace(existing, placeholder);
+                    *existing = ConfigValue::Array(Sourced {
+                        value: vec![old, value],
+                        span: None,
+                        provenance: None,
+                    });
                 }
-                Some(_) if i == target_path.len() - 1 => return true,
-                _ => return false,
             }
         }
-        false
     }
 
-    fn increment_counted(&mut self, name: &str, target_path: &[String]) {
-        let acc = self
-            .counted
+    /// Insert a value at a dotted path (for config overrides like --config.foo.bar).
+    fn insert_at_path(&mut self, path: &[&str], value: ConfigValue) {
+        insert_nested(&mut self.result, path, value);
+    }
+
+    /// Check if a value exists at the given name.
+    fn has_value(&self, name: &str) -> bool {
+        self.result.contains_key(name)
+    }
+
+    fn increment_counted(&mut self, name: &str) {
+        self.increment_counted_to(InsertTarget::Current, name);
+    }
+
+    fn increment_counted_to(&mut self, target: InsertTarget, name: &str) {
+        let counted_map = match target {
+            InsertTarget::Current => &mut self.counted,
+            InsertTarget::Parent(idx) => &mut self.parent_stack[idx].counted,
+        };
+        let acc = counted_map
             .entry(name.to_string())
-            .or_insert_with(|| CountedAccumulator {
-                count: 0,
-                target_path: target_path.to_vec(),
-            });
+            .or_insert_with(|| CountedAccumulator { count: 0 });
         acc.count += 1;
     }
 
@@ -656,8 +871,8 @@ impl<'a> ParseContext<'a> {
                 span: None,
                 provenance: Some(prov),
             });
-            let path_refs: Vec<&str> = acc.target_path.iter().map(|s| s.as_str()).collect();
-            insert_nested(&mut self.result, &path_refs, value);
+            // Insert directly at the field name (flat)
+            self.result.insert(name.clone(), value);
         }
     }
 
@@ -761,6 +976,7 @@ mod tests {
     use super::*;
     use crate as args;
     use facet::Facet;
+    use facet_testhelpers::test;
 
     // ========================================================================
     // Test helpers for building ConfigValue concisely
@@ -845,6 +1061,7 @@ mod tests {
     /// Assert that parsing produces the expected ConfigValue
     fn assert_parses_to<T: Facet<'static>>(args: &[&str], expected: ConfigValue) {
         let schema = Schema::from_shape(T::SHAPE).expect("valid schema");
+        tracing::debug!(args = ?schema.args().args().keys().collect::<Vec<_>>(), "Schema args");
         let config = cli_config(args);
         let output = parse_cli(&schema, &config);
 
@@ -909,11 +1126,12 @@ mod tests {
             }
             (ConfigValue::Enum(a), ConfigValue::Enum(e)) => {
                 assert_eq!(a.value.variant, e.value.variant, "enum variant mismatch");
-                assert_eq!(
-                    a.value.fields.keys().collect::<Vec<_>>(),
-                    e.value.fields.keys().collect::<Vec<_>>(),
-                    "enum fields mismatch"
-                );
+                // Sort keys for order-independent comparison
+                let mut actual_keys: Vec<_> = a.value.fields.keys().collect();
+                let mut expected_keys: Vec<_> = e.value.fields.keys().collect();
+                actual_keys.sort();
+                expected_keys.sort();
+                assert_eq!(actual_keys, expected_keys, "enum fields mismatch");
                 for (key, expected_val) in &e.value.fields {
                     let actual_val = a
                         .value
@@ -1225,26 +1443,23 @@ mod tests {
 
     #[test]
     fn test_subcommand_basic() {
+        // Tuple variant with no args passed -> empty fields
+        // (the inner struct's fields have defaults, handled by deserializer)
         assert_parses_to::<ArgsWithSubcommand>(
             &["build"],
-            // Variant name is PascalCase for facet-format deserialization
-            // Tuple variants wrap fields in "0" for the first tuple position
-            cv::object([("command", cv::enumv("Build", [("0", cv::object([]))]))]),
+            cv::object([("command", cv::enumv("Build", []))]),
         );
     }
 
     #[test]
     fn test_subcommand_with_args() {
+        // Tuple variant's inner struct fields appear directly in the variant
+        // (no "0" wrapper - the deserializer handles routing to tuple position)
         assert_parses_to::<ArgsWithSubcommand>(
             &["build", "--release"],
             cv::object([(
                 "command",
-                // Variant name is PascalCase for facet-format deserialization
-                // Tuple variants wrap fields in "0" for the first tuple position
-                cv::enumv(
-                    "Build",
-                    [("0", cv::object([("release", cv::bool(true, "--release"))]))],
-                ),
+                cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
             )]),
         );
     }
@@ -1258,11 +1473,9 @@ mod tests {
                 (
                     "command",
                     // Variant name is PascalCase for facet-format deserialization
-                    // Tuple variants wrap fields in "0" for the first tuple position
-                    cv::enumv(
-                        "Build",
-                        [("0", cv::object([("release", cv::bool(true, "--release"))]))],
-                    ),
+                    // Flattened tuple variants have their fields directly (not wrapped in "0")
+                    // because the CLI layer emits flat ConfigValue - the deserializer handles routing
+                    cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
                 ),
             ]),
         );
@@ -1348,26 +1561,22 @@ mod tests {
     }
 
     #[test]
-    fn test_flatten_parses_flags_into_nested_structure() {
-        // Parse --verbose and check it ends up nested under "common"
+    fn test_flatten_parses_flags_flat() {
+        // Flattened fields appear at the CURRENT level, not nested
         let expected = cv::object([
             ("input", cv::string("file.txt", "file.txt")),
-            ("common", cv::object([("verbose", cv::bool(true, "-v"))])),
+            ("verbose", cv::bool(true, "-v")),
         ]);
         assert_parses_to::<ArgsWithFlatten>(&["-v", "file.txt"], expected);
     }
 
     #[test]
     fn test_flatten_multiple_flags() {
+        // Multiple flattened flags all appear at current level
         let expected = cv::object([
             ("input", cv::string("test.txt", "test.txt")),
-            (
-                "common",
-                cv::object([
-                    ("verbose", cv::bool(true, "-v")),
-                    ("quiet", cv::bool(true, "-q")),
-                ]),
-            ),
+            ("verbose", cv::bool(true, "-v")),
+            ("quiet", cv::bool(true, "-q")),
         ]);
         assert_parses_to::<ArgsWithFlatten>(&["-v", "-q", "test.txt"], expected);
     }
@@ -1376,10 +1585,7 @@ mod tests {
     fn test_flatten_long_flags() {
         let expected = cv::object([
             ("input", cv::string("data.txt", "data.txt")),
-            (
-                "common",
-                cv::object([("verbose", cv::bool(true, "--verbose"))]),
-            ),
+            ("verbose", cv::bool(true, "--verbose")),
         ]);
         assert_parses_to::<ArgsWithFlatten>(&["--verbose", "data.txt"], expected);
     }
@@ -1416,13 +1622,1073 @@ mod tests {
 
     #[test]
     fn test_deeply_nested_flatten() {
+        // Two levels of flatten: options is flattened, and options.nested is flattened
+        // So "debug" appears at the TOP level, not nested
         let expected = cv::object([
             ("path", cv::string("file.txt", "file.txt")),
-            (
-                "options",
-                cv::object([("nested", cv::object([("debug", cv::bool(true, "--debug"))]))]),
-            ),
+            ("debug", cv::bool(true, "--debug")),
         ]);
         assert_parses_to::<DeepFlatten>(&["--debug", "file.txt"], expected);
+    }
+
+    // ========================================================================
+    // Tests: ConfigValue structure expectations
+    // ========================================================================
+    //
+    // These tests encode our expectations about what ConfigValue structure
+    // the CLI layer produces. The deserializer then routes these values
+    // to the correct locations based on the type's Shape.
+    //
+    // KEY PRINCIPLE: The CLI layer produces ConfigValue that matches the
+    // SCHEMA structure, NOT the Rust struct layout. For flattened fields,
+    // the values appear at the current level. For non-flattened nested
+    // structs, values are nested under the field name.
+
+    // ------------------------------------------------------------------------
+    // Simple top-level flags produce flat structure
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct SimpleFlags {
+        #[facet(args::named)]
+        verbose: bool,
+        #[facet(args::named)]
+        quiet: bool,
+    }
+
+    #[test]
+    fn test_cv_simple_flags_flat() {
+        // Simple flags at top level -> flat ConfigValue
+        assert_parses_to::<SimpleFlags>(
+            &["--verbose"],
+            cv::object([("verbose", cv::bool(true, "--verbose"))]),
+        );
+    }
+
+    #[test]
+    fn test_cv_multiple_simple_flags_flat() {
+        assert_parses_to::<SimpleFlags>(
+            &["--verbose", "--quiet"],
+            cv::object([
+                ("verbose", cv::bool(true, "--verbose")),
+                ("quiet", cv::bool(true, "--quiet")),
+            ]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Flattened struct fields appear at CURRENT level
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct InnerOpts {
+        #[facet(args::named)]
+        debug: bool,
+        #[facet(args::named)]
+        trace: bool,
+    }
+
+    #[derive(Facet)]
+    struct OuterWithFlatten {
+        #[facet(args::named)]
+        verbose: bool,
+        #[facet(flatten)]
+        inner: InnerOpts,
+    }
+
+    #[test]
+    fn test_cv_flattened_fields_at_current_level() {
+        // --debug comes from flattened InnerOpts
+        // It should appear at top level, NOT nested under "inner"
+        assert_parses_to::<OuterWithFlatten>(
+            &["--debug"],
+            cv::object([("debug", cv::bool(true, "--debug"))]),
+        );
+    }
+
+    #[test]
+    fn test_cv_flattened_mixed_with_outer() {
+        // Mix of outer field (--verbose) and flattened field (--trace)
+        assert_parses_to::<OuterWithFlatten>(
+            &["--verbose", "--trace"],
+            cv::object([
+                ("verbose", cv::bool(true, "--verbose")),
+                ("trace", cv::bool(true, "--trace")),
+            ]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Non-flattened nested struct via config produces nested structure
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct DatabaseConfig {
+        host: String,
+        port: u16,
+    }
+
+    #[derive(Facet)]
+    struct AppWithConfig {
+        #[facet(args::named)]
+        verbose: bool,
+        #[facet(args::config)]
+        db: Option<DatabaseConfig>,
+    }
+
+    #[test]
+    fn test_cv_config_override_nested() {
+        // --db.host=localhost should produce nested structure
+        assert_parses_to::<AppWithConfig>(
+            &["--db.host", "localhost"],
+            cv::object([(
+                "db",
+                cv::object([("host", cv::string("localhost", "--db.host"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_cv_config_override_deeply_nested() {
+        // Multiple levels of nesting
+        assert_parses_to::<AppWithConfig>(
+            &["--db.host", "localhost", "--db.port", "5432"],
+            cv::object([(
+                "db",
+                cv::object([
+                    ("host", cv::string("localhost", "--db.host")),
+                    ("port", cv::string("5432", "--db.port")),
+                ]),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Subcommand fields are nested under the variant
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct CvBuildOpts {
+        #[facet(args::named)]
+        release: bool,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum CvCommand {
+        Build {
+            #[facet(flatten)]
+            opts: CvBuildOpts,
+        },
+        Test {
+            #[facet(args::named)]
+            coverage: bool,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithSubcommand {
+        #[facet(args::named)]
+        verbose: bool,
+        #[facet(args::subcommand)]
+        cmd: CvCommand,
+    }
+
+    #[test]
+    fn test_cv_subcommand_enum_structure() {
+        // Subcommand produces Enum variant with fields
+        // --release is from flattened CvBuildOpts, appears directly in variant fields
+        assert_parses_to::<AppWithSubcommand>(
+            &["build", "--release"],
+            cv::object([(
+                "cmd",
+                cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_cv_subcommand_with_outer_flag() {
+        // Outer flag + subcommand
+        assert_parses_to::<AppWithSubcommand>(
+            &["--verbose", "test", "--coverage"],
+            cv::object([
+                ("verbose", cv::bool(true, "--verbose")),
+                (
+                    "cmd",
+                    cv::enumv("Test", [("coverage", cv::bool(true, "--coverage"))]),
+                ),
+            ]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Deeply nested flatten (flatten inside flatten)
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct Level3 {
+        #[facet(args::named)]
+        deep_flag: bool,
+    }
+
+    #[derive(Facet)]
+    struct Level2 {
+        #[facet(flatten)]
+        level3: Level3,
+    }
+
+    #[derive(Facet)]
+    struct Level1 {
+        #[facet(flatten)]
+        level2: Level2,
+    }
+
+    #[test]
+    fn test_cv_deeply_nested_flatten_still_flat() {
+        // Even with flatten inside flatten, the field appears at top level
+        assert_parses_to::<Level1>(
+            &["--deep-flag"],
+            cv::object([("deep_flag", cv::bool(true, "--deep-flag"))]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Renamed fields use effective name in ConfigValue
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct RenamedFields {
+        #[facet(args::named, rename = "output-dir")]
+        output: String,
+    }
+
+    #[test]
+    fn test_cv_renamed_field_uses_effective_name() {
+        // The CLI flag is --output-dir, and the ConfigValue key is "output-dir"
+        assert_parses_to::<RenamedFields>(
+            &["--output-dir", "/tmp"],
+            cv::object([("output-dir", cv::string("/tmp", "--output-dir"))]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Config with flattened inner struct
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct CvLoggingConfig {
+        level: String,
+    }
+
+    #[derive(Facet)]
+    struct CvServerConfig {
+        port: u16,
+        #[facet(flatten)]
+        logging: CvLoggingConfig,
+    }
+
+    #[derive(Facet)]
+    struct AppWithFlattenedConfig {
+        #[facet(args::config)]
+        server: Option<CvServerConfig>,
+    }
+
+    #[test]
+    fn test_cv_config_with_flattened_inner() {
+        // --server.level should work because logging is flattened in CvServerConfig
+        // The path in ConfigValue is server.level (not server.logging.level)
+        assert_parses_to::<AppWithFlattenedConfig>(
+            &["--server.level", "debug"],
+            cv::object([(
+                "server",
+                cv::object([("level", cv::string("debug", "--server.level"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_cv_config_non_flattened_field() {
+        // --server.port is a direct field
+        assert_parses_to::<AppWithFlattenedConfig>(
+            &["--server.port", "8080"],
+            cv::object([(
+                "server",
+                cv::object([("port", cv::string("8080", "--server.port"))]),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Mix of everything
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct GlobalOpts {
+        #[facet(args::named, args::short = 'v')]
+        verbose: bool,
+    }
+
+    #[derive(Facet)]
+    struct CvComplexApp {
+        #[facet(flatten)]
+        global: GlobalOpts,
+        #[facet(args::config)]
+        config: Option<CvServerConfig>,
+        #[facet(args::subcommand)]
+        command: Option<CvCommand>,
+    }
+
+    #[test]
+    fn test_cv_complex_mix() {
+        // Global flag (flattened) + config override + subcommand
+        assert_parses_to::<CvComplexApp>(
+            &["-v", "--config.port", "9000", "build", "--release"],
+            cv::object([
+                ("verbose", cv::bool(true, "-v")),
+                (
+                    "config",
+                    cv::object([("port", cv::string("9000", "--config.port"))]),
+                ),
+                (
+                    "command",
+                    cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
+                ),
+            ]),
+        );
+    }
+
+    // ========================================================================
+    // Tests: Subcommand nesting behavior
+    // ========================================================================
+    //
+    // Subcommands create REAL nesting - the variant's fields are inside the
+    // enum value, not at the top level. This is different from flatten which
+    // hoists fields UP.
+
+    // ------------------------------------------------------------------------
+    // Subcommand with flattened struct field
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct SubBuildConfig {
+        #[facet(args::named)]
+        jobs: Option<u32>,
+        #[facet(args::named)]
+        target: Option<String>,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum SubCommand1 {
+        Build {
+            #[facet(flatten)]
+            config: SubBuildConfig,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithSubcommandFlattenedField {
+        #[facet(args::subcommand)]
+        cmd: SubCommand1,
+    }
+
+    #[test]
+    fn test_cv_subcommand_flattened_struct_field() {
+        // When a subcommand has a flattened struct field,
+        // the struct's fields appear directly in the variant (flat)
+        assert_parses_to::<AppWithSubcommandFlattenedField>(
+            &["build", "--jobs", "4"],
+            cv::object([(
+                "cmd",
+                cv::enumv("Build", [("jobs", cv::string("4", "--jobs"))]),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Nested subcommands (subcommand within subcommand)
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum DbSubCommand {
+        Create {
+            #[facet(args::positional)]
+            name: String,
+        },
+        Drop {
+            #[facet(args::positional)]
+            name: String,
+            #[facet(args::named)]
+            force: bool,
+        },
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum TopCommand {
+        Db {
+            #[facet(args::subcommand)]
+            action: DbSubCommand,
+        },
+        Version,
+    }
+
+    #[derive(Facet)]
+    struct AppWithNestedSubcommands {
+        #[facet(args::subcommand)]
+        cmd: TopCommand,
+    }
+
+    #[test]
+    fn test_cv_nested_subcommands() {
+        // db create mydb -> nested enums
+        assert_parses_to::<AppWithNestedSubcommands>(
+            &["db", "create", "mydb"],
+            cv::object([(
+                "cmd",
+                cv::enumv(
+                    "Db",
+                    [(
+                        "action",
+                        cv::enumv("Create", [("name", cv::string("mydb", "mydb"))]),
+                    )],
+                ),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_cv_nested_subcommands_with_flags() {
+        // db drop mydb --force
+        assert_parses_to::<AppWithNestedSubcommands>(
+            &["db", "drop", "mydb", "--force"],
+            cv::object([(
+                "cmd",
+                cv::enumv(
+                    "Db",
+                    [(
+                        "action",
+                        cv::enumv(
+                            "Drop",
+                            [
+                                ("name", cv::string("mydb", "mydb")),
+                                ("force", cv::bool(true, "--force")),
+                            ],
+                        ),
+                    )],
+                ),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Subcommand with tuple variant (single flattened field)
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct InstallOpts {
+        #[facet(args::named)]
+        global: bool,
+        #[facet(args::positional)]
+        package: String,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum PkgCommand {
+        Install(#[facet(flatten)] InstallOpts),
+        Uninstall {
+            #[facet(args::positional)]
+            package: String,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithTupleVariant {
+        #[facet(args::subcommand)]
+        cmd: PkgCommand,
+    }
+
+    #[test]
+    fn test_cv_tuple_variant_flattened() {
+        // Tuple variant with flatten - fields appear directly in variant
+        // NOT wrapped in "0"
+        assert_parses_to::<AppWithTupleVariant>(
+            &["install", "--global", "lodash"],
+            cv::object([(
+                "cmd",
+                cv::enumv(
+                    "Install",
+                    [
+                        ("global", cv::bool(true, "--global")),
+                        ("package", cv::string("lodash", "lodash")),
+                    ],
+                ),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_cv_struct_variant_after_tuple() {
+        // Struct variant in same enum as tuple variant
+        assert_parses_to::<AppWithTupleVariant>(
+            &["uninstall", "lodash"],
+            cv::object([(
+                "cmd",
+                cv::enumv("Uninstall", [("package", cv::string("lodash", "lodash"))]),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Subcommand with flatten inside flatten
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct DeepOpts {
+        #[facet(args::named)]
+        deep: bool,
+    }
+
+    #[derive(Facet)]
+    struct MiddleOpts {
+        #[facet(flatten)]
+        deep_opts: DeepOpts,
+        #[facet(args::named)]
+        middle: bool,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum DeepFlattenCmd {
+        Run {
+            #[facet(flatten)]
+            opts: MiddleOpts,
+            #[facet(args::positional)]
+            target: String,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithDeepFlattenSubcmd {
+        #[facet(args::subcommand)]
+        cmd: DeepFlattenCmd,
+    }
+
+    #[test]
+    fn test_cv_subcommand_deep_flatten() {
+        // flatten inside flatten inside subcommand
+        // All flattened fields appear directly in variant fields
+        assert_parses_to::<AppWithDeepFlattenSubcmd>(
+            &["run", "--deep", "--middle", "mytarget"],
+            cv::object([(
+                "cmd",
+                cv::enumv(
+                    "Run",
+                    [
+                        ("deep", cv::bool(true, "--deep")),
+                        ("middle", cv::bool(true, "--middle")),
+                        ("target", cv::string("mytarget", "mytarget")),
+                    ],
+                ),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Unit variant subcommand
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum SimpleCmd {
+        Start,
+        Stop,
+        Status {
+            #[facet(args::named)]
+            verbose: bool,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithUnitVariant {
+        #[facet(args::subcommand)]
+        cmd: SimpleCmd,
+    }
+
+    #[test]
+    fn test_cv_unit_variant_subcommand() {
+        // Unit variant - no fields
+        assert_parses_to::<AppWithUnitVariant>(
+            &["start"],
+            cv::object([("cmd", cv::enumv("Start", []))]),
+        );
+    }
+
+    #[test]
+    fn test_cv_unit_variant_then_struct_variant() {
+        // Struct variant in same enum
+        assert_parses_to::<AppWithUnitVariant>(
+            &["status", "--verbose"],
+            cv::object([(
+                "cmd",
+                cv::enumv("Status", [("verbose", cv::bool(true, "--verbose"))]),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Renamed subcommand variant
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum RenamedCmd {
+        #[facet(rename = "ls")]
+        List {
+            #[facet(args::named)]
+            all: bool,
+        },
+        #[facet(rename = "rm")]
+        Remove {
+            #[facet(args::positional)]
+            path: String,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithRenamedVariants {
+        #[facet(args::subcommand)]
+        cmd: RenamedCmd,
+    }
+
+    #[test]
+    fn test_cv_renamed_subcommand_variant() {
+        // CLI uses "ls", ConfigValue uses effective_name "ls"
+        assert_parses_to::<AppWithRenamedVariants>(
+            &["ls", "--all"],
+            cv::object([("cmd", cv::enumv("ls", [("all", cv::bool(true, "--all"))]))]),
+        );
+    }
+
+    #[test]
+    fn test_cv_another_renamed_variant() {
+        assert_parses_to::<AppWithRenamedVariants>(
+            &["rm", "/tmp/foo"],
+            cv::object([(
+                "cmd",
+                cv::enumv("rm", [("path", cv::string("/tmp/foo", "/tmp/foo"))]),
+            )]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Global flags before subcommand
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    struct GlobalFlags {
+        #[facet(args::named, args::short = 'v')]
+        verbose: bool,
+        #[facet(args::named, args::short = 'q')]
+        quiet: bool,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum ActionCmd {
+        Run {
+            #[facet(args::positional)]
+            script: String,
+        },
+    }
+
+    #[derive(Facet)]
+    struct AppWithGlobalFlags {
+        #[facet(flatten)]
+        globals: GlobalFlags,
+        #[facet(args::subcommand)]
+        action: ActionCmd,
+    }
+
+    #[test]
+    fn test_cv_global_flags_before_subcommand() {
+        // Global flags (flattened) appear at top level
+        // Subcommand fields are nested in enum
+        assert_parses_to::<AppWithGlobalFlags>(
+            &["-v", "run", "script.sh"],
+            cv::object([
+                ("verbose", cv::bool(true, "-v")),
+                (
+                    "action",
+                    cv::enumv("Run", [("script", cv::string("script.sh", "script.sh"))]),
+                ),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_cv_multiple_global_flags() {
+        assert_parses_to::<AppWithGlobalFlags>(
+            &["-v", "-q", "run", "test.sh"],
+            cv::object([
+                ("verbose", cv::bool(true, "-v")),
+                ("quiet", cv::bool(true, "-q")),
+                (
+                    "action",
+                    cv::enumv("Run", [("script", cv::string("test.sh", "test.sh"))]),
+                ),
+            ]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Optional subcommand
+    // ------------------------------------------------------------------------
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum OptionalCmd {
+        Init,
+        Build,
+    }
+
+    #[derive(Facet)]
+    struct AppWithOptionalSubcommand {
+        #[facet(args::named)]
+        version: bool,
+        #[facet(args::subcommand)]
+        cmd: Option<OptionalCmd>,
+    }
+
+    #[test]
+    fn test_cv_optional_subcommand_present() {
+        assert_parses_to::<AppWithOptionalSubcommand>(
+            &["init"],
+            cv::object([("cmd", cv::enumv("Init", []))]),
+        );
+    }
+
+    #[test]
+    fn test_cv_optional_subcommand_absent() {
+        // No subcommand - just flags
+        assert_parses_to::<AppWithOptionalSubcommand>(
+            &["--version"],
+            cv::object([("version", cv::bool(true, "--version"))]),
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Adoption agency: flags bubbling up to parent levels
+    // ------------------------------------------------------------------------
+    // When a flag like `--help` or `--verbose` is specified after a subcommand,
+    // but doesn't exist in the subcommand's schema, it should "bubble up" to
+    // the parent level if it exists there.
+
+    #[derive(Facet)]
+    struct ParentWithGlobalFlag {
+        /// Global verbose flag at parent level
+        #[facet(args::named, args::short = 'v')]
+        verbose: bool,
+
+        #[facet(args::subcommand)]
+        command: ChildCommand,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum ChildCommand {
+        /// Build subcommand - no verbose flag here
+        Build {
+            #[facet(args::named)]
+            release: bool,
+        },
+        /// Test subcommand - no verbose flag here
+        Test {
+            #[facet(args::positional)]
+            filter: Option<String>,
+        },
+    }
+
+    #[test]
+    fn test_adoption_flag_after_subcommand_bubbles_up() {
+        // `myapp build --verbose` - verbose doesn't exist in Build, should bubble to parent
+        assert_parses_to::<ParentWithGlobalFlag>(
+            &["build", "--verbose"],
+            cv::object([
+                ("verbose", cv::bool(true, "--verbose")),
+                ("command", cv::enumv("Build", [])),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_short_flag_after_subcommand_bubbles_up() {
+        // `myapp build -v` - short flag should also bubble up
+        assert_parses_to::<ParentWithGlobalFlag>(
+            &["build", "-v"],
+            cv::object([
+                ("verbose", cv::bool(true, "-v")),
+                ("command", cv::enumv("Build", [])),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_mixed_flags_some_bubble() {
+        // `myapp build --release --verbose` - release stays in subcommand, verbose bubbles
+        assert_parses_to::<ParentWithGlobalFlag>(
+            &["build", "--release", "--verbose"],
+            cv::object([
+                ("verbose", cv::bool(true, "--verbose")),
+                (
+                    "command",
+                    cv::enumv("Build", [("release", cv::bool(true, "--release"))]),
+                ),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_flag_before_subcommand_stays_at_parent() {
+        // `myapp --verbose build` - verbose is at parent level, should stay there
+        assert_parses_to::<ParentWithGlobalFlag>(
+            &["--verbose", "build"],
+            cv::object([
+                ("verbose", cv::bool(true, "--verbose")),
+                ("command", cv::enumv("Build", [])),
+            ]),
+        );
+    }
+
+    // Nested subcommands with adoption
+    #[derive(Facet)]
+    struct GrandparentWithFlag {
+        /// Global flag at grandparent level
+        #[facet(args::named)]
+        debug: bool,
+
+        #[facet(args::subcommand)]
+        command: ParentCommand,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum ParentCommand {
+        Repo {
+            /// Parent-level flag
+            #[facet(args::named)]
+            quiet: bool,
+
+            #[facet(args::subcommand)]
+            action: RepoAction,
+        },
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum RepoAction {
+        Clone {
+            #[facet(args::positional)]
+            url: String,
+        },
+        Push {
+            #[facet(args::named)]
+            force: bool,
+        },
+    }
+
+    #[test]
+    fn test_adoption_nested_bubbles_to_immediate_parent() {
+        // `myapp repo clone https://... --quiet` - quiet should bubble to repo level
+        assert_parses_to::<GrandparentWithFlag>(
+            &["repo", "clone", "https://example.com", "--quiet"],
+            cv::object([(
+                "command",
+                cv::enumv(
+                    "Repo",
+                    [
+                        ("quiet", cv::bool(true, "--quiet")),
+                        (
+                            "action",
+                            cv::enumv(
+                                "Clone",
+                                [(
+                                    "url",
+                                    cv::string("https://example.com", "https://example.com"),
+                                )],
+                            ),
+                        ),
+                    ],
+                ),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_nested_bubbles_to_grandparent() {
+        // `myapp repo clone https://... --debug` - debug should bubble all the way to grandparent
+        assert_parses_to::<GrandparentWithFlag>(
+            &["repo", "clone", "https://example.com", "--debug"],
+            cv::object([
+                ("debug", cv::bool(true, "--debug")),
+                (
+                    "command",
+                    cv::enumv(
+                        "Repo",
+                        [(
+                            "action",
+                            cv::enumv(
+                                "Clone",
+                                [(
+                                    "url",
+                                    cv::string("https://example.com", "https://example.com"),
+                                )],
+                            ),
+                        )],
+                    ),
+                ),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_nested_mixed_levels() {
+        // `myapp repo push --force --quiet --debug`
+        // force stays in Push, quiet bubbles to Repo, debug bubbles to grandparent
+        assert_parses_to::<GrandparentWithFlag>(
+            &["repo", "push", "--force", "--quiet", "--debug"],
+            cv::object([
+                ("debug", cv::bool(true, "--debug")),
+                (
+                    "command",
+                    cv::enumv(
+                        "Repo",
+                        [
+                            ("quiet", cv::bool(true, "--quiet")),
+                            (
+                                "action",
+                                cv::enumv("Push", [("force", cv::bool(true, "--force"))]),
+                            ),
+                        ],
+                    ),
+                ),
+            ]),
+        );
+    }
+
+    // Test that local flags shadow parent flags (no adoption when flag exists locally)
+    #[derive(Facet)]
+    struct ParentWithShadowedFlag {
+        #[facet(args::named, args::short = 'v')]
+        verbose: bool,
+
+        #[facet(args::subcommand)]
+        command: ChildWithSameFlag,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum ChildWithSameFlag {
+        Run {
+            /// Local verbose flag - shadows parent
+            #[facet(args::named, args::short = 'v')]
+            verbose: bool,
+
+            #[facet(args::positional)]
+            script: String,
+        },
+    }
+
+    #[test]
+    fn test_adoption_local_flag_shadows_parent() {
+        // `myapp run script.sh --verbose` - verbose exists in Run, should NOT bubble
+        assert_parses_to::<ParentWithShadowedFlag>(
+            &["run", "script.sh", "--verbose"],
+            cv::object([(
+                "command",
+                cv::enumv(
+                    "Run",
+                    [
+                        ("verbose", cv::bool(true, "--verbose")),
+                        ("script", cv::string("script.sh", "script.sh")),
+                    ],
+                ),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_short_flag_shadows_parent() {
+        // `myapp run script.sh -v` - short flag also shadows
+        assert_parses_to::<ParentWithShadowedFlag>(
+            &["run", "script.sh", "-v"],
+            cv::object([(
+                "command",
+                cv::enumv(
+                    "Run",
+                    [
+                        ("verbose", cv::bool(true, "-v")),
+                        ("script", cv::string("script.sh", "script.sh")),
+                    ],
+                ),
+            )]),
+        );
+    }
+
+    // Test with FigueBuiltins (realistic scenario)
+    #[derive(Facet)]
+    struct AppWithBuiltins {
+        #[facet(flatten)]
+        builtins: crate::FigueBuiltins,
+
+        #[facet(args::subcommand)]
+        command: AppCommand,
+    }
+
+    #[derive(Facet)]
+    #[repr(u8)]
+    enum AppCommand {
+        Install {
+            #[facet(args::positional)]
+            package: String,
+        },
+        Uninstall {
+            #[facet(args::positional)]
+            package: String,
+            #[facet(args::named)]
+            force: bool,
+        },
+    }
+
+    #[test]
+    fn test_adoption_help_flag_bubbles_from_subcommand() {
+        // `myapp install foo --help` - help doesn't exist in Install, bubbles to builtins
+        assert_parses_to::<AppWithBuiltins>(
+            &["install", "foo", "--help"],
+            cv::object([
+                ("help", cv::bool(true, "--help")),
+                (
+                    "command",
+                    cv::enumv("Install", [("package", cv::string("foo", "foo"))]),
+                ),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_version_flag_bubbles_from_subcommand() {
+        // `myapp uninstall bar --version` - version bubbles to builtins
+        assert_parses_to::<AppWithBuiltins>(
+            &["uninstall", "bar", "--version"],
+            cv::object([
+                ("version", cv::bool(true, "--version")),
+                (
+                    "command",
+                    cv::enumv("Uninstall", [("package", cv::string("bar", "bar"))]),
+                ),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_adoption_help_short_flag_bubbles() {
+        // `myapp install foo -h` - short help flag bubbles
+        assert_parses_to::<AppWithBuiltins>(
+            &["install", "foo", "-h"],
+            cv::object([
+                ("help", cv::bool(true, "-h")),
+                (
+                    "command",
+                    cv::enumv("Install", [("package", cv::string("foo", "foo"))]),
+                ),
+            ]),
+        );
     }
 }

@@ -2,6 +2,7 @@
 
 use crate::assert_diag_snapshot;
 use facet::Facet;
+use facet_testhelpers::test;
 use figue as args;
 
 /// Test tuple variant subcommand with struct payload (like clap's automatic flattening)

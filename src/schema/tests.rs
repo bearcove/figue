@@ -230,30 +230,6 @@ fn test_flatten_schema_builds() {
     assert!(args.args.contains_key("input"), "input should be in args");
 }
 
-#[test]
-fn test_flatten_target_path() {
-    let schema = Schema::from_shape(ArgsWithFlatten::SHAPE).expect("schema should build");
-    let args = schema.args();
-
-    // input is not flattened, so target_path should be ["input"]
-    let input_arg = args.args.get("input").expect("input should exist");
-    assert_eq!(input_arg.target_path, vec!["input".to_string()]);
-
-    // verbose is flattened from common, so target_path should be ["common", "verbose"]
-    let verbose_arg = args.args.get("verbose").expect("verbose should exist");
-    assert_eq!(
-        verbose_arg.target_path,
-        vec!["common".to_string(), "verbose".to_string()]
-    );
-
-    // quiet is flattened from common, so target_path should be ["common", "quiet"]
-    let quiet_arg = args.args.get("quiet").expect("quiet should exist");
-    assert_eq!(
-        quiet_arg.target_path,
-        vec!["common".to_string(), "quiet".to_string()]
-    );
-}
-
 /// Nested flattening test structs
 #[derive(Facet)]
 struct OutputArgs {
@@ -275,38 +251,6 @@ struct ArgsWithNestedFlatten {
     input: String,
     #[facet(flatten)]
     extended: ExtendedCommonArgs,
-}
-
-#[test]
-fn test_flatten_nested_target_path() {
-    let schema = Schema::from_shape(ArgsWithNestedFlatten::SHAPE).expect("schema should build");
-    let args = schema.args();
-
-    // input is not flattened
-    let input_arg = args.args.get("input").expect("input should exist");
-    assert_eq!(input_arg.target_path, vec!["input".to_string()]);
-
-    // verbose is nested: extended.common.verbose
-    let verbose_arg = args.args.get("verbose").expect("verbose should exist");
-    assert_eq!(
-        verbose_arg.target_path,
-        vec![
-            "extended".to_string(),
-            "common".to_string(),
-            "verbose".to_string()
-        ]
-    );
-
-    // format is nested: extended.output.format
-    let format_arg = args.args.get("format").expect("format should exist");
-    assert_eq!(
-        format_arg.target_path,
-        vec![
-            "extended".to_string(),
-            "output".to_string(),
-            "format".to_string()
-        ]
-    );
 }
 
 /// Test conflicting flags from flatten
@@ -390,31 +334,6 @@ fn test_config_flatten_schema_builds() {
     );
 }
 
-#[test]
-fn test_config_flatten_target_path() {
-    let schema = Schema::from_shape(ArgsWithFlattenedConfig::SHAPE).expect("schema should build");
-    let config = schema.config().expect("should have config");
-    let fields = config.fields();
-
-    // name is not flattened - target_path should be ["name"]
-    let name_field = fields.get("name").expect("name should exist");
-    assert_eq!(name_field.target_path, vec!["name".to_string()]);
-
-    // log_level is flattened from common - target_path should be ["common", "log_level"]
-    let log_level_field = fields.get("log_level").expect("log_level should exist");
-    assert_eq!(
-        log_level_field.target_path,
-        vec!["common".to_string(), "log_level".to_string()]
-    );
-
-    // debug is flattened from common - target_path should be ["common", "debug"]
-    let debug_field = fields.get("debug").expect("debug should exist");
-    assert_eq!(
-        debug_field.target_path,
-        vec!["common".to_string(), "debug".to_string()]
-    );
-}
-
 /// Deeply nested config flatten: common inside extended
 #[derive(Facet)]
 struct ExtendedConfig {
@@ -455,40 +374,6 @@ fn test_config_nested_flatten_schema_builds() {
     assert!(fields.contains_key("port"), "should have port");
 }
 
-#[test]
-fn test_config_nested_flatten_target_path() {
-    let schema =
-        Schema::from_shape(ArgsWithNestedFlattenConfig::SHAPE).expect("schema should build");
-    let config = schema.config().expect("should have config");
-    let fields = config.fields();
-
-    // app_name is not flattened
-    let app_name_field = fields.get("app_name").expect("app_name should exist");
-    assert_eq!(app_name_field.target_path, vec!["app_name".to_string()]);
-
-    // log_level is nested: extended.common.log_level
-    let log_level_field = fields.get("log_level").expect("log_level should exist");
-    assert_eq!(
-        log_level_field.target_path,
-        vec![
-            "extended".to_string(),
-            "common".to_string(),
-            "log_level".to_string()
-        ]
-    );
-
-    // host is nested: extended.database.host
-    let host_field = fields.get("host").expect("host should exist");
-    assert_eq!(
-        host_field.target_path,
-        vec![
-            "extended".to_string(),
-            "database".to_string(),
-            "host".to_string()
-        ]
-    );
-}
-
 /// Test conflict detection in config flatten
 #[derive(Facet)]
 struct ConflictingConfigA {
@@ -524,6 +409,34 @@ fn test_config_flatten_conflict_detected() {
     assert!(
         err.contains("duplicate") || err.contains("name"),
         "error should mention duplicate: {}",
+        err
+    );
+}
+
+// ============================================================================
+// Struct fields in args must be flattened
+// ============================================================================
+
+#[derive(Facet)]
+struct NestedOptions {
+    #[facet(args::named)]
+    verbose: bool,
+}
+
+#[derive(Facet)]
+struct ArgsWithUnflattenedStruct {
+    #[facet(args::named)]
+    options: NestedOptions, // ERROR: struct fields must use flatten
+}
+
+#[test]
+fn test_struct_field_without_flatten_is_error() {
+    let result = Schema::from_shape(ArgsWithUnflattenedStruct::SHAPE);
+    assert!(result.is_err(), "struct field without flatten should error");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("flatten"),
+        "error should mention flatten: {}",
         err
     );
 }
