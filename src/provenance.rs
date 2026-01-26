@@ -231,35 +231,6 @@ impl core::fmt::Display for Override {
     }
 }
 
-/// The result of parsing layered configuration, including provenance tracking.
-#[derive(Debug)]
-pub struct ConfigResult<T> {
-    /// The resolved configuration value.
-    pub value: T,
-
-    /// Records of values that were overridden by higher-priority layers.
-    pub overrides: Vec<Override>,
-
-    /// Information about config file path resolution.
-    pub file_resolution: FileResolution,
-}
-
-impl<T> ConfigResult<T> {
-    /// Create a new config result.
-    pub fn new(value: T, overrides: Vec<Override>, file_resolution: FileResolution) -> Self {
-        Self {
-            value,
-            overrides,
-            file_resolution,
-        }
-    }
-
-    /// Check if any values were overridden.
-    pub fn has_overrides(&self) -> bool {
-        !self.overrides.is_empty()
-    }
-}
-
 /// Status of a config file path during resolution.
 #[derive(Facet, Debug, Clone)]
 #[repr(u8)]
@@ -406,10 +377,4 @@ mod tests {
         assert!(display.contains("env"));
     }
 
-    #[test]
-    fn test_config_result() {
-        let result = ConfigResult::new(42, Vec::new(), FileResolution::new());
-        assert_eq!(result.value, 42);
-        assert!(!result.has_overrides());
-    }
 }

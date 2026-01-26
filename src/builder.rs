@@ -12,14 +12,12 @@ use facet_reflect::ReflectError;
 
 use crate::{
     config_format::{ConfigFormat, ConfigFormatError},
-    config_value::ConfigValue,
     help::HelpConfig,
     layers::{
         cli::{CliConfig, CliConfigBuilder},
         env::{EnvConfig, EnvConfigBuilder},
         file::FileConfig,
     },
-    provenance::ConfigResult,
     schema::{Schema, error::SchemaError},
 };
 
@@ -132,22 +130,6 @@ impl<T> ConfigBuilder<T> {
             file_config: self.file_config,
             _phantom: PhantomData,
         }
-    }
-
-    /// Build the layered configuration, returning just the merged ConfigValue.
-    ///
-    /// This parses all configured layers and merges them in priority order:
-    /// defaults < file < env < cli
-    pub fn build_value(self) -> Result<ConfigValue, BuilderError> {
-        panic!("build_value is being moved to the driver API")
-    }
-
-    /// Build the layered configuration with full provenance tracking.
-    ///
-    /// Returns a [`ConfigResult`] containing the merged value, provenance map,
-    /// and override records.
-    pub fn build_traced(self) -> Result<ConfigResult<ConfigValue>, BuilderError> {
-        panic!("build_traced is being moved to the driver API")
     }
 }
 

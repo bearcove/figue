@@ -15,7 +15,7 @@
 //! - [ ] Collect unused keys from layer parsers into LayerOutput
 //! - [ ] Add facet-validate pass after deserialization
 //! - [ ] Improve render_pretty() with Ariadne integration
-//! - [ ] Migrate build_traced tests to driver API
+//! - [x] Migrate build_traced tests to driver API (removed - functionality covered by driver tests)
 #![allow(clippy::result_large_err)]
 
 use std::marker::PhantomData;
