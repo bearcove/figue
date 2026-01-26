@@ -646,6 +646,7 @@ dependencies = [
  "facet-showcase",
  "facet-solver",
  "facet-testhelpers",
+ "figue-attrs",
  "heck",
  "indexmap",
  "insta",
@@ -654,6 +655,13 @@ dependencies = [
  "tempfile",
  "tracing",
  "unicode-width",
+]
+
+[[package]]
+name = "figue-attrs"
+version = "1.0.0"
+dependencies = [
+ "facet",
 ]
 
 [[package]]

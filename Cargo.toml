@@ -19,6 +19,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 camino = "1.1"
+figue-attrs = { path = "figue-attrs", version = "1.0.0" }
 facet = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43", features = [
   "indexmap",
   "camino",

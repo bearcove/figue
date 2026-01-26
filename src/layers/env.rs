@@ -596,6 +596,7 @@ fn insert_nested(
 #[cfg(test)]
 mod tests {
     use facet::Facet;
+    use figue_attrs as args;
 
     use crate::config_value::ConfigValue;
     use crate::driver::Severity;
@@ -609,10 +610,10 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithConfig {
-        #[facet(crate::named)]
+        #[facet(args::named)]
         verbose: bool,
 
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: ServerConfig,
     }
 
@@ -624,7 +625,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithNestedConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: AppSettings,
     }
 
@@ -642,7 +643,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithListConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: ListConfig,
     }
 
@@ -1029,7 +1030,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithoutConfig {
-        #[facet(crate::named)]
+        #[facet(args::named)]
         verbose: bool,
     }
 
@@ -1066,10 +1067,10 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithFlattenConfig {
-        #[facet(crate::named)]
+        #[facet(args::named)]
         verbose: bool,
 
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: ServerConfigWithFlatten,
     }
 
@@ -1155,7 +1156,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithDeepFlattenConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: OuterConfigWithDeepFlatten,
     }
 

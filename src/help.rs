@@ -337,16 +337,17 @@ fn write_subcommand_help(out: &mut String, sub: &Subcommand) {
 mod tests {
     use super::*;
     use facet::Facet;
+    use figue_attrs as args;
 
     /// Common arguments that can be flattened into other structs
     #[derive(Facet)]
     struct CommonArgs {
         /// Enable verbose output
-        #[facet(crate::named, crate::short = 'v')]
+        #[facet(args::named, crate::short = 'v')]
         verbose: bool,
 
         /// Enable quiet mode
-        #[facet(crate::named, crate::short = 'q')]
+        #[facet(args::named, crate::short = 'q')]
         quiet: bool,
     }
 
@@ -354,7 +355,7 @@ mod tests {
     #[derive(Facet)]
     struct ArgsWithFlatten {
         /// Input file
-        #[facet(crate::positional)]
+        #[facet(args::positional)]
         input: String,
 
         /// Common options
@@ -406,11 +407,11 @@ mod tests {
     #[derive(Facet)]
     struct ServeArgs {
         /// Port to serve on
-        #[facet(crate::named)]
+        #[facet(args::named)]
         port: u16,
 
         /// Host to bind to
-        #[facet(crate::named)]
+        #[facet(args::named)]
         host: String,
     }
 
@@ -418,7 +419,7 @@ mod tests {
     #[derive(Facet)]
     struct TupleVariantArgs {
         /// Subcommand to run
-        #[facet(crate::subcommand)]
+        #[facet(args::subcommand)]
         command: Option<TupleVariantCommand>,
     }
 

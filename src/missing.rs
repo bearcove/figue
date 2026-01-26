@@ -409,6 +409,7 @@ mod tests {
     use super::*;
     use crate::config_value::{ObjectMap, Sourced};
     use facet::Facet;
+    use figue_attrs as args;
 
     // ========================================================================
     // Test helpers
@@ -451,14 +452,14 @@ mod tests {
     // Uses "config" as the field name
     #[derive(Facet)]
     struct ArgsWithConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: SimpleFields,
     }
 
     // Uses "settings" as the field name to ensure we don't hardcode "config"
     #[derive(Facet)]
     struct ArgsWithSettings {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: SimpleFields,
     }
 
@@ -607,7 +608,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithOptionalConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: FieldsWithOptional,
     }
 
@@ -635,7 +636,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithAllOptionalSettings {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: AllOptionalFields,
     }
 
@@ -665,13 +666,13 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithNestedConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: NestedFields,
     }
 
     #[derive(Facet)]
     struct ArgsWithNestedSettings {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: NestedFields,
     }
 
@@ -756,7 +757,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithDeepConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: DeepFields,
     }
 
@@ -820,13 +821,13 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithFlattenedConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: FlattenedFields,
     }
 
     #[derive(Facet)]
     struct ArgsWithFlattenedSettings {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: FlattenedFields,
     }
 
@@ -897,7 +898,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithVecConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: FieldsWithVec,
     }
 
@@ -968,7 +969,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithVecOfStructsSettings {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: FieldsWithVecOfStructs,
     }
 
@@ -1070,7 +1071,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithOptionalNestedConfig {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         config: FieldsWithOptionalNested,
     }
 
@@ -1129,7 +1130,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithMixedSettings {
-        #[facet(crate::config)]
+        #[facet(args::config)]
         settings: MixedFields,
     }
 
@@ -1187,7 +1188,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithoutConfig {
-        #[facet(crate::named)]
+        #[facet(args::named)]
         verbose: bool,
     }
 
@@ -1212,7 +1213,7 @@ mod tests {
 
     #[derive(Facet)]
     struct ArgsWithRequiredCliArg {
-        #[facet(crate::named)]
+        #[facet(args::named)]
         required_field: String,
     }
 

@@ -1,0 +1,16 @@
+[package]
+name = "figue-attrs"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.90.0"
+authors = ["Amos Wenger <amos@bearcove.eu>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bearcove/figue"
+description = "Attribute macros for figue CLI argument parsing"
+documentation = "https://docs.rs/figue-attrs"
+keywords = ["cli", "args", "parser", "facet", "command-line"]
+categories = ["command-line-interface"]
+homepage = "https://github.com/bearcove/figue"
+
+[dependencies]
+facet = { git = "https://github.com/facet-rs/facet", branch = "main", version = "0.43" }

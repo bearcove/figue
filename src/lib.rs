@@ -1,11 +1,17 @@
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
-#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 // Allow deprecated during transition to new driver-based API
 #![allow(deprecated)]
 #![doc = include_str!("../README.md")]
 
 extern crate self as figue;
+
+// Re-export attribute macros from figue-attrs.
+// This allows users to write `#[facet(figue::named)]` or `use figue as args; #[facet(args::named)]`
+pub use figue_attrs::*;
+
+// Alias for internal use - allows `#[facet(args::named)]` syntax
+use figue_attrs as args;
 
 #[macro_use]
 mod macros;
@@ -115,15 +121,15 @@ pub fn from_slice<T: Facet<'static>>(args: &[&str]) -> driver::DriverOutcome<T> 
 #[derive(facet::Facet, Default, Debug)]
 pub struct FigueBuiltins {
     /// Show help message and exit.
-    #[facet(crate::named, crate::short = 'h', crate::help, default)]
+    #[facet(args::named, args::short = 'h', args::help, default)]
     pub help: bool,
 
     /// Show version and exit.
-    #[facet(crate::named, crate::short = 'V', crate::version, default)]
+    #[facet(args::named, args::short = 'V', args::version, default)]
     pub version: bool,
 
     /// Generate shell completions.
-    #[facet(crate::named, crate::completions, default)]
+    #[facet(args::named, args::completions, default)]
     pub completions: Option<Shell>,
 }
 
@@ -136,7 +142,7 @@ mod tests {
     #[derive(facet::Facet)]
     struct ArgsWithBuiltins {
         /// Input file
-        #[facet(crate::positional)]
+        #[facet(args::positional)]
         input: String,
 
         /// Standard options
@@ -198,11 +204,11 @@ mod tests {
     #[derive(facet::Facet)]
     struct ArgsWithRenamedHelp {
         /// Print documentation and exit
-        #[facet(crate::named, crate::help, rename = "print-docs")]
+        #[facet(args::named, args::help, rename = "print-docs")]
         show_help: bool,
 
         /// Show program version
-        #[facet(crate::named, crate::version, rename = "show-version")]
+        #[facet(args::named, args::version, rename = "show-version")]
         show_ver: bool,
     }
 
@@ -237,7 +243,7 @@ mod tests {
     /// Deeply nested special fields (flatten inside flatten)
     #[derive(facet::Facet)]
     struct DeepInner {
-        #[facet(crate::named, crate::help, default)]
+        #[facet(args::named, args::help, default)]
         help: bool,
     }
 
@@ -249,7 +255,7 @@ mod tests {
 
     #[derive(facet::Facet)]
     struct ArgsWithDeepFlatten {
-        #[facet(crate::positional)]
+        #[facet(args::positional)]
         input: String,
 
         #[facet(flatten)]
@@ -274,93 +280,3 @@ mod tests {
     }
 }
 
-// Args extension attributes for use with #[facet(args::attr)] syntax.
-//
-// After importing `use figue as args;`, users can write:
-//   #[facet(args::positional)]
-//   #[facet(args::short = 'v')]
-//   #[facet(args::named)]
-
-// Generate args attribute grammar using the grammar DSL.
-// This generates:
-// - `Attr` enum with all args attribute variants
-// - `__attr!` macro that dispatches to attribute handlers and returns ExtensionAttr
-// - `__parse_attr!` macro for parsing (internal use)
-facet::define_attr_grammar! {
-    ns "args";
-    crate_path ::figue;
-
-    /// Args attribute types for field configuration.
-    pub enum Attr {
-        /// Marks a field as a positional argument.
-        ///
-        /// Usage: `#[facet(args::positional)]`
-        Positional,
-        /// Marks a field as a named argument.
-        ///
-        /// Usage: `#[facet(args::named)]`
-        Named,
-        /// Specifies a short flag character for the field.
-        ///
-        /// Usage: `#[facet(args::short = 'v')]` or just `#[facet(args::short)]`
-        Short(Option<char>),
-        /// Marks a field as a subcommand.
-        ///
-        /// The field type must be an enum where each variant represents a subcommand.
-        /// Variant names are converted to kebab-case for matching.
-        ///
-        /// Usage: `#[facet(args::subcommand)]`
-        Subcommand,
-        /// Marks a field as a counted flag.
-        ///
-        /// Each occurrence of the flag increments the count. Works with both short
-        /// flags (`-vvv` or `-v -v -v`) and long flags (`--verbose --verbose`).
-        /// The field type must be an integer type (u8, u16, u32, u64, usize, i8, i16, i32, i64, isize).
-        /// Uses saturating arithmetic to avoid overflow.
-        ///
-        /// Usage: `#[facet(args::named, args::short = 'v', args::counted)]`
-        Counted,
-        /// Marks a field as a layered configuration field.
-        ///
-        /// The field will be populated from merged configuration sources (CLI overrides,
-        /// environment variables, config files) in priority order: CLI > env > file > default.
-        ///
-        /// This automatically generates:
-        /// - `--{field_name} <PATH>` flag to specify config file path
-        /// - `--{field_name}.foo.bar <VALUE>` style CLI overrides
-        /// - Environment variable parsing
-        /// - Config file loading with multiple format support
-        ///
-        /// Usage: `#[facet(args::config)]`
-        Config,
-        /// Specifies the environment variable prefix for a config field.
-        ///
-        /// Must be used together with `#[facet(args::config)]`.
-        ///
-        /// Usage: `#[facet(args::env_prefix = "MYAPP")]`
-        ///
-        /// Example: `env_prefix = "MYAPP"` results in `MYAPP__FIELD__NAME` env vars.
-        EnvPrefix(Option<&'static str>),
-        /// Marks a field as the help flag.
-        ///
-        /// When this flag is set, the driver shows help and exits with code 0.
-        /// The field should be a `bool`.
-        ///
-        /// Usage: `#[facet(figue::help)]`
-        Help,
-        /// Marks a field as the version flag.
-        ///
-        /// When this flag is set, the driver shows version and exits with code 0.
-        /// The field should be a `bool`.
-        ///
-        /// Usage: `#[facet(figue::version)]`
-        Version,
-        /// Marks a field as the completions flag.
-        ///
-        /// When this flag is set, the driver generates shell completions and exits with code 0.
-        /// The field should be `Option<Shell>`.
-        ///
-        /// Usage: `#[facet(figue::completions)]`
-        Completions,
-    }
-}
