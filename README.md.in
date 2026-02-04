@@ -4,8 +4,10 @@
 [![documentation](https://docs.rs/figue/badge.svg)](https://docs.rs/figue)
 [![MIT/Apache-2.0 licensed](https://img.shields.io/crates/l/figue.svg)](./LICENSE)
 
-Provides configuration parsing from CLI arguments, environment variables, and config files,
-a bit like [figment](https://docs.rs/figment/latest/figment/) but based on facet reflection:
+figue (pronounced 'fig', like the fruit) provides configuration parsing from
+CLI arguments, environment variables, and config files, a bit like
+[figment](https://docs.rs/figment/latest/figment/) but based on facet
+reflection:
 
 ```rust
 use facet_pretty::FacetPretty;
