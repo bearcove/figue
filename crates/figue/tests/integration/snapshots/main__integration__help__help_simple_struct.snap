@@ -1,5 +1,5 @@
 ---
-source: tests/integration/help.rs
+source: crates/figue/tests/integration/help.rs
 expression: "$crate :: common ::\nstrip_binary_paths(& $crate :: common :: strip_ansi(& help))"
 ---
 myapp 1.0.0
@@ -27,4 +27,4 @@ OPTIONS:
     -V, --version
             Show version and exit.
         --completions <SHELL>
-            Generate shell completions.
+            Generate shell completions for Bash, Fish, or Zsh.
