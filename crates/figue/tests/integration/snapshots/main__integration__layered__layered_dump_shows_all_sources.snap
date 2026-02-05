@@ -2,7 +2,7 @@
 source: crates/figue/tests/integration/layered.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Error: Missing required arguments
+Error: Missing required arguments
 
 You provided:
   --debug --settings.experimental true
@@ -11,6 +11,6 @@ Missing:
   --settings.name 
 
 Example usage:
-  --debug --settings.experimental true --settings.name <value>
+  --debug --settings.experimental true --settings.name <settings.name>
 
 Run with --help for usage information.

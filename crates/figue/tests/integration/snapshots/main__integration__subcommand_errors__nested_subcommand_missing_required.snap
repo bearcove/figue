@@ -2,7 +2,7 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Error: Missing required arguments
+Error: Missing required arguments
 
 You provided:
   repo clone
@@ -11,6 +11,6 @@ Missing:
   <url>   # Repository URL
 
 Example usage:
-  repo clone url
+  repo clone <url>
 
 Run with --help for usage information.

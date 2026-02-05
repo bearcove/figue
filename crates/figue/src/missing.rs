@@ -30,10 +30,17 @@ pub struct MissingFieldInfo {
 /// Format missing CLI arguments with a visual mockup showing what command should look like.
 ///
 /// This creates a user-friendly error that shows:
-/// 1. The actual command they typed
+/// 1. The actual command they typed (if any)
 /// 2. What's missing with visual indicators
 /// 3. A concrete example of what the complete command should look like
-pub fn format_missing_cli_args_with_mockup(missing: &[MissingFieldInfo], cli_args: &str) -> String {
+///
+/// # Arguments
+/// * `missing` - List of missing field information
+/// * `cli_args` - Optional CLI args string. None if no arguments were provided.
+pub fn format_missing_cli_args_with_mockup(
+    missing: &[MissingFieldInfo],
+    cli_args: Option<&str>,
+) -> String {
     use owo_colors::OwoColorize;
     use std::fmt::Write;
 
@@ -44,9 +51,13 @@ pub fn format_missing_cli_args_with_mockup(missing: &[MissingFieldInfo], cli_arg
     let mut output = String::new();
 
     // Show what they typed
-    writeln!(output, "Error: Missing required arguments\n").unwrap();
-    writeln!(output, "You provided:").unwrap();
-    writeln!(output, "  {}\n", cli_args.dimmed()).unwrap();
+    writeln!(output, "Missing required arguments\n").unwrap();
+
+    // Only show "You provided:" if arguments were actually provided
+    if let Some(args) = cli_args {
+        writeln!(output, "You provided:").unwrap();
+        writeln!(output, "  {}\n", args.dimmed()).unwrap();
+    }
 
     // Show what's missing
     writeln!(output, "Missing:").unwrap();
@@ -63,15 +74,34 @@ pub fn format_missing_cli_args_with_mockup(missing: &[MissingFieldInfo], cli_arg
 
     // Build example command
     writeln!(output, "\nExample usage:").unwrap();
-    let mut example_parts = vec![cli_args.to_string()];
+
+    // Determine what to show as the base command
+    let mut example_parts = match cli_args {
+        Some(args) => vec![args.to_string()],
+        None => {
+            // Try to get the actual program name from std::env
+            let program_name = std::env::args()
+                .next()
+                .and_then(|path| {
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "program".to_string());
+            vec![program_name]
+        }
+    };
+
     for field in missing {
         if let Some(cli_flag) = &field.cli_flag {
             if cli_flag.starts_with('<') && cli_flag.ends_with('>') {
-                // Positional argument like <name>
-                example_parts.push(cli_flag.trim_matches(|c| c == '<' || c == '>').to_string());
+                // Positional argument like <name> - keep the brackets
+                example_parts.push(cli_flag.clone());
             } else if cli_flag.starts_with("--") {
                 // Named argument like --region
-                example_parts.push(format!("{} <value>", cli_flag));
+                let flag_name = cli_flag.trim_start_matches("--");
+                example_parts.push(format!("{} <{}>", cli_flag, flag_name));
             }
         }
     }

@@ -152,19 +152,19 @@ impl<T: Facet<'static>> Driver<T> {
         let mut file_resolution = None;
 
         // Get CLI args source for Ariadne error display
+        // None means no arguments were provided (used for better error formatting)
         let cli_args_source = self
             .config
             .cli_config
             .as_ref()
             .map(|c| {
                 let args = c.resolve_args().join(" ");
-                if args.is_empty() {
-                    "<no arguments>".to_string()
-                } else {
-                    args
-                }
+                if args.is_empty() { None } else { Some(args) }
             })
-            .unwrap_or_else(|| "<no arguments>".to_string());
+            .unwrap_or(None);
+
+        // For Ariadne display, we need a string (use placeholder if empty)
+        let cli_args_display = cli_args_source.as_deref().unwrap_or("<no arguments>");
 
         // Phase 1: Parse each layer
         // Priority order (lowest to highest): defaults < file < env < cli
@@ -291,7 +291,7 @@ impl<T: Facet<'static>> Driver<T> {
                     layers,
                     file_resolution,
                     overrides: Vec::new(),
-                    cli_args_source,
+                    cli_args_source: cli_args_display.to_string(),
                     source_name: "<cli>".to_string(),
                 }),
             });
@@ -343,7 +343,7 @@ impl<T: Facet<'static>> Driver<T> {
                     layers,
                     file_resolution,
                     overrides,
-                    cli_args_source,
+                    cli_args_source: cli_args_display.to_string(),
                     source_name: "<cli>".to_string(),
                 }),
             });
@@ -426,7 +426,10 @@ impl<T: Facet<'static>> Driver<T> {
                 // Use CLI-focused format with visual mockup
                 format!(
                     "{}\nRun with --help for usage information.",
-                    format_missing_cli_args_with_mockup(&missing_fields, &cli_args_source)
+                    format_missing_cli_args_with_mockup(
+                        &missing_fields,
+                        cli_args_source.as_deref()
+                    )
                 )
             } else {
                 // Use detailed format with config dump
@@ -498,7 +501,7 @@ impl<T: Facet<'static>> Driver<T> {
                     layers,
                     file_resolution,
                     overrides,
-                    cli_args_source,
+                    cli_args_source: cli_args_display.to_string(),
                     source_name: "<cli>".to_string(),
                 }),
             });
@@ -522,13 +525,13 @@ impl<T: Facet<'static>> Driver<T> {
                             entry.real_span.len as usize,
                         );
                         let (name, contents) =
-                            get_source_for_provenance(&entry.provenance, &cli_args_source, &layers);
+                            get_source_for_provenance(&entry.provenance, cli_args_display, &layers);
                         (Some(real_span), name, contents)
                     } else {
-                        (None, "<unknown>".to_string(), cli_args_source.clone())
+                        (None, "<unknown>".to_string(), cli_args_display.to_string())
                     }
                 } else {
-                    (None, "<unknown>".to_string(), cli_args_source.clone())
+                    (None, "<unknown>".to_string(), cli_args_display.to_string())
                 };
 
                 return DriverOutcome::err(DriverError::Failed {
@@ -556,7 +559,7 @@ impl<T: Facet<'static>> Driver<T> {
                 layers,
                 file_resolution,
                 overrides,
-                cli_args_source,
+                cli_args_source: cli_args_display.to_string(),
                 source_name: "<cli>".to_string(),
             },
             merged_config: value_with_virtual_spans,
@@ -568,11 +571,11 @@ impl<T: Facet<'static>> Driver<T> {
 /// Get the source name and contents for a provenance.
 fn get_source_for_provenance(
     provenance: &Provenance,
-    cli_args_source: &str,
+    cli_args_display: &str,
     layers: &ConfigLayers,
 ) -> (String, String) {
     match provenance {
-        Provenance::Cli { .. } => ("<cli>".to_string(), cli_args_source.to_string()),
+        Provenance::Cli { .. } => ("<cli>".to_string(), cli_args_display.to_string()),
         Provenance::Env { .. } => {
             // Use the virtual env document from the env layer
             let source_text = layers.env.source_text.as_ref().cloned().unwrap_or_default();

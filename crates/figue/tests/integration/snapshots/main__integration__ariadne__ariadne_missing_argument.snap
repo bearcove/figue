@@ -2,15 +2,12 @@
 source: crates/figue/tests/integration/ariadne.rs
 expression: ariadne_output
 ---
-Error: Error: Missing required arguments
-
-You provided:
-  <no arguments>
+Error: Missing required arguments
 
 Missing:
   --required-field 
 
 Example usage:
-  <no arguments> --required-field <value>
+  main-138217976bbdb088 --required-field <required-field>
 
 Run with --help for usage information.
