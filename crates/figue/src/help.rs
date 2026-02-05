@@ -297,10 +297,15 @@ fn write_arg_help(out: &mut String, arg: &ArgSchema) {
 
         // Show value placeholder for non-bool, non-counted types
         if !is_counted && !arg.value().is_bool() {
-            out.push_str(&format!(
-                " <{}>",
-                arg.value().type_identifier().to_uppercase()
-            ));
+            let placeholder = if let Some(variants) = arg.value().inner_if_option().enum_variants()
+            {
+                // For enums, show the variants: <bash,zsh,fish>
+                format!("<{}>", variants.join(","))
+            } else {
+                // For other types, show the type identifier: <STRING>
+                format!("<{}>", arg.value().type_identifier().to_uppercase())
+            };
+            out.push_str(&format!(" {}", placeholder));
         }
     }
 

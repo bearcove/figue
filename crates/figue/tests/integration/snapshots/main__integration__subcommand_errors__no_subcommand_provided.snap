@@ -12,7 +12,7 @@ OPTIONS:
             Show help message and exit.
     -V, --version
             Show version and exit.
-        --completions <SHELL>
+        --completions <bash,zsh,fish>
             Generate shell completions.
 
 COMMANDS:
