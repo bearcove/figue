@@ -2,15 +2,11 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required arguments
-
-You provided:
-  init
-
-Missing:
-  <name>   # Project name (creates directory with this name)
-
-Example usage:
-  init <name>
-
-Run with --help for usage information.
+Error: missing required argument
+   ╭─[ <suggestion>:1:6 ]
+   │
+ 1 │ init <name>
+   │      ───┬──  
+   │         ╰──── Project name (creates directory with this name)
+───╯
+Note: Run with --help for usage information.

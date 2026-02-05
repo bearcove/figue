@@ -2,12 +2,10 @@
 source: crates/figue/tests/integration/sequence.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required arguments
-
-Missing:
-  <files>   # Files to process (at least one required)
-
-Example usage:
-  main-138217976bbdb088 <files>
-
-Run with --help for usage information.
+Error: missing required argument
+   ╭─[ <suggestion>:1:23 ]
+   │
+ 1 │ main-138217976bbdb088 <files>
+   │                       ───┬───  
+   │                          ╰───── Files to process (at least one required)
+───╯

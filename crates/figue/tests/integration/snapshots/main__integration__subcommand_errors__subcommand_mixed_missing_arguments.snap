@@ -2,15 +2,10 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required arguments
-
-You provided:
-  deploy production
-
-Missing:
-  --region   # Deployment region (required)
-
-Example usage:
-  deploy production --region <region>
-
-Run with --help for usage information.
+Error: missing required argument
+   ╭─[ <suggestion>:1:19 ]
+   │
+ 1 │ deploy production --region <region>
+   │                   ────────┬────────  
+   │                           ╰────────── Deployment region (required)
+───╯

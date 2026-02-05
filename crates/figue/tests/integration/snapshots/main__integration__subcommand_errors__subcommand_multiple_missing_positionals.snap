@@ -2,17 +2,10 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required arguments
-
-You provided:
-  create
-
-Missing:
-  <resource-type>   # Resource type (e.g., user, project)
-  <resource-name>   # Resource name
-  <location>   # Resource location
-
-Example usage:
-  create <resource-type> <resource-name> <location>
-
-Run with --help for usage information.
+Error: missing required argument
+   ╭─[ <suggestion>:1:8 ]
+   │
+ 1 │ create <resource-type>
+   │        ───────┬───────  
+   │               ╰───────── Resource type (e.g., user, project)
+───╯
