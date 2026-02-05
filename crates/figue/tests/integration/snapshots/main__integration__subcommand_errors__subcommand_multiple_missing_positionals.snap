@@ -2,20 +2,17 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required fields:
+Error: Error: Missing required arguments
 
-Sources:
-├─ cli --settings.*
-└─ defaults
-
-command.. Create::.. create
+You provided:
+  create
 
 Missing:
-  command::Create.resource_type <String> (<resource-type>)
-    Resource type (e.g., user, project)
-  command::Create.resource_name <String> (<resource-name>)
-    Resource name
-  command::Create.location <String> (<location>)
-    Resource location
+  <resource-type>   # Resource type (e.g., user, project)
+  <resource-name>   # Resource name
+  <location>   # Resource location
+
+Example usage:
+  create resource-type resource-name location
 
 Run with --help for usage information.

@@ -2,20 +2,15 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required fields:
+Error: Error: Missing required arguments
 
-Sources:
-├─ cli --settings.*
-└─ defaults
-
-help......... false...... DEFAULT
-version...... false...... DEFAULT
-completions.. <default>.. DEFAULT
-command...... Init::..... init
-└─ name.. myproject.. myproject
+You provided:
+  init myproject
 
 Missing:
-  command::Init.description <String> (<description>)
-    Project description
+  <description>   # Project description
+
+Example usage:
+  init myproject description
 
 Run with --help for usage information.

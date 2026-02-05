@@ -2,20 +2,15 @@
 source: crates/figue/tests/integration/schema_defaults.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Missing required fields:
+Error: Error: Missing required arguments
 
-Sources:
-├─ file:
-│  └─ (picked) config.json  (via --config)
-├─ env $TEST__*
-├─ cli --config.*
-└─ defaults
-
-field_set........... hello.. config.json:2
-field_with_default.. 42..... DEFAULT
-field_required...... ....... ⨯ MISSING
+You provided:
+  <no arguments>
 
 Missing:
-  field_required <String> (--config.field-required or $TEST__FIELD_REQUIRED)
+  --config.field-required 
+
+Example usage:
+  <no arguments> --config.field-required <value>
 
 Run with --help for usage information.
