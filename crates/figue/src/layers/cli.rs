@@ -967,6 +967,7 @@ impl<'a> ParseContext<'a> {
     fn emit_error_at(&mut self, message: String, span: facet_reflect::Span) {
         self.diagnostics.push(Diagnostic {
             message,
+            label: None,
             path: None,
             span: Some(crate::span::Span::new(
                 span.offset as usize,

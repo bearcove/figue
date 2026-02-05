@@ -101,14 +101,15 @@ pub fn build_corrected_command_diagnostics(
             cli_text.len() + 1
         };
 
-        // Use the field documentation as the message
-        let message = field
-            .doc_comment
-            .clone()
-            .unwrap_or_else(|| "missing required argument".to_string());
+        // Use generic message for the error, field docs go in the label (rendered by Ariadne)
+        let message = "missing required argument".to_string();
+
+        // Use field documentation as the label message
+        let label = field.doc_comment.clone();
 
         let diagnostic = Diagnostic {
             message,
+            label,
             path: None,
             span: Some(Span::new(missing_arg_start, missing_arg_text.len())),
             severity: Severity::Error,

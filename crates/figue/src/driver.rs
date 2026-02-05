@@ -336,6 +336,7 @@ impl<T: Facet<'static>> Driver<T> {
                 report: Box::new(DriverReport {
                     diagnostics: vec![Diagnostic {
                         message,
+                        label: None,
                         path: None,
                         span: None,
                         severity: Severity::Error,
@@ -507,6 +508,7 @@ impl<T: Facet<'static>> Driver<T> {
                 report: Box::new(DriverReport {
                     diagnostics: vec![Diagnostic {
                         message,
+                        label: None,
                         path: None,
                         span: None,
                         severity: Severity::Error,
@@ -551,6 +553,7 @@ impl<T: Facet<'static>> Driver<T> {
                     report: Box::new(DriverReport {
                         diagnostics: vec![Diagnostic {
                             message: e.to_string(),
+                            label: None,
                             path: None,
                             span,
                             severity: Severity::Error,
@@ -1011,11 +1014,12 @@ impl DriverReport {
                 Severity::Note => Color::Cyan,
             };
 
+            let label_message = diagnostic.label.as_deref().unwrap_or(&diagnostic.message);
             let report = Report::build(report_kind, span.clone())
                 .with_message(&diagnostic.message)
                 .with_label(
                     Label::new(span)
-                        .with_message(&diagnostic.message)
+                        .with_message(label_message)
                         .with_color(color),
                 )
                 .finish();
@@ -1047,6 +1051,8 @@ impl core::fmt::Debug for DriverReport {
 pub struct Diagnostic {
     /// Human-readable message.
     pub message: String,
+    /// Optional label message for the span (if different from message).
+    pub label: Option<String>,
     /// Optional path within the schema or config.
     pub path: Option<Path>,
     /// Optional byte span within a formatted shape or source file.
