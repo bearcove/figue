@@ -33,7 +33,7 @@ use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
 use crate::missing::{
-    collect_missing_fields, format_missing_cli_args_ariadne, format_missing_fields_summary,
+    build_corrected_command_diagnostics, collect_missing_fields, format_missing_fields_summary,
 };
 use crate::path::Path;
 use crate::provenance::{FileResolution, Override, Provenance};
@@ -425,13 +425,26 @@ impl<T: Facet<'static>> Driver<T> {
                     .iter()
                     .all(|f| matches!(f.kind, crate::missing::MissingFieldKind::CliArg));
 
-            let message = if all_cli_missing {
-                // Use Ariadne-based format with visual spans
-                format!(
-                    "{}Run with --help for usage information.",
-                    format_missing_cli_args_ariadne(&missing_fields, cli_args_source.as_deref())
-                )
-            } else {
+            if all_cli_missing {
+                // Use corrected command as source with proper diagnostics
+                let corrected = build_corrected_command_diagnostics(
+                    &missing_fields,
+                    cli_args_source.as_deref(),
+                );
+
+                return DriverOutcome::err(DriverError::Failed {
+                    report: Box::new(DriverReport {
+                        diagnostics: corrected.diagnostics,
+                        layers,
+                        file_resolution,
+                        overrides,
+                        cli_args_source: corrected.corrected_source,
+                        source_name: "<suggestion>".to_string(),
+                    }),
+                });
+            }
+
+            let message = {
                 // Use detailed format with config dump
                 let mut dump_buf = Vec::new();
                 let resolution = file_resolution.as_ref().cloned().unwrap_or_default();
@@ -958,6 +971,18 @@ impl DriverReport {
             // For diagnostics without a span, just print the message directly
             // (e.g., missing required fields error doesn't point to a specific location)
             if diagnostic.span.is_none() {
+                // If message starts with "Error:" it's already a formatted report (e.g., from Ariadne)
+                // Just output it as-is without adding another prefix
+                if diagnostic.message.starts_with("Error:")
+                    || diagnostic.message.starts_with("Warning:")
+                    || diagnostic.message.starts_with("Note:")
+                {
+                    output.extend_from_slice(diagnostic.message.as_bytes());
+                    output.push(b'\n');
+                    continue;
+                }
+
+                // Otherwise add the appropriate prefix
                 let prefix = match diagnostic.severity {
                     Severity::Error => "Error: ",
                     Severity::Warning => "Warning: ",

@@ -38,26 +38,28 @@ pub struct MissingFieldInfo {
     pub kind: MissingFieldKind,
 }
 
-/// Format missing CLI arguments using Ariadne for visual span-based errors.
+/// Information about a corrected command with missing arguments for display.
+pub struct CorrectedCommandInfo {
+    /// The corrected command text showing what should be typed
+    pub corrected_source: String,
+    /// Diagnostics with spans pointing to the corrected source
+    pub diagnostics: Vec<crate::driver::Diagnostic>,
+}
+
+/// Build corrected command source and diagnostics for missing CLI arguments.
 ///
-/// This creates an Ariadne report showing:
-/// 1. The command line with a span pointing to where the missing argument should be
-/// 2. The field documentation as a note
-/// 3. An example of the correct usage
-pub fn format_missing_cli_args_ariadne(
+/// Returns the corrected command as a source and diagnostics that point to it.
+pub fn build_corrected_command_diagnostics(
     missing: &[MissingFieldInfo],
     cli_args: Option<&str>,
-) -> String {
-    use ariadne::{Color, Label, Report, ReportKind, Source};
-
-    if missing.is_empty() {
-        return String::new();
-    }
+) -> CorrectedCommandInfo {
+    use crate::driver::{Diagnostic, Severity};
+    use crate::span::Span;
 
     let cli_text = cli_args.unwrap_or("");
-    let mut output = Vec::new();
+    let mut diagnostics = Vec::new();
 
-    // For each missing field, create an Ariadne report
+    // For each missing field, create diagnostic pointing to corrected command
     for field in missing {
         // Build the corrected command with the missing argument
         let missing_arg_text = if let Some(cli_flag) = &field.cli_flag {
@@ -92,35 +94,39 @@ pub fn format_missing_cli_args_ariadne(
         };
 
         // Calculate the span of the missing argument in the corrected command
-        let missing_arg_start = cli_text.len() + if cli_text.is_empty() { 0 } else { 1 };
+        let missing_arg_start = if cli_text.is_empty() {
+            corrected_command.len() - missing_arg_text.len()
+        } else {
+            cli_text.len() + 1
+        };
         let missing_arg_end = missing_arg_start + missing_arg_text.len();
-        let span = missing_arg_start..missing_arg_end;
 
-        let mut report = Report::build(ReportKind::Error, span.clone())
-            .with_message("missing required argument");
+        // Use the field documentation as the message
+        let message = field
+            .doc_comment
+            .clone()
+            .unwrap_or_else(|| "missing required argument".to_string());
 
-        // Use the field documentation in the label
-        let label_msg = field.doc_comment.as_deref().unwrap_or_else(|| {
-            if let Some(cli_flag) = &field.cli_flag {
-                cli_flag
-            } else {
-                &field.field_name
-            }
+        diagnostics.push(Diagnostic {
+            message,
+            path: None,
+            span: Some(Span::new(missing_arg_start, missing_arg_text.len())),
+            severity: Severity::Error,
         });
 
-        report = report.with_label(
-            Label::new(span)
-                .with_message(label_msg)
-                .with_color(Color::Green),
-        );
-
-        // Write the report using the corrected command as the source
-        let source = Source::from(corrected_command);
-        report.finish().write(source, &mut output).unwrap();
-        output.push(b'\n');
+        // Only handle the first missing field for now (most common case)
+        // Multiple missing would need a different UI approach
+        return CorrectedCommandInfo {
+            corrected_source: corrected_command,
+            diagnostics,
+        };
     }
 
-    String::from_utf8(output).unwrap_or_else(|_| String::new())
+    // No missing fields - return empty
+    CorrectedCommandInfo {
+        corrected_source: cli_text.to_string(),
+        diagnostics: vec![],
+    }
 }
 
 /// Format missing CLI arguments with a visual mockup showing what command should look like.
