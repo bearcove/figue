@@ -1,17 +1,17 @@
 ---
 source: crates/figue/tests/integration/simple.rs
-expression: help
+expression: "$crate :: common :: strip_ansi(& help.to_string())"
 ---
 /Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088
 
-[1m[33mUSAGE[39m[0m:
+USAGE:
     /Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088 [OPTIONS]
 
-[1m[33mOPTIONS[39m[0m:
-        [32m--name[39m <STRING>
-    [32m-h[39m, [32m--help[39m
+OPTIONS:
+        --name <STRING>
+    -h, --help
             Show help message and exit.
-    [32m-V[39m, [32m--version[39m
+    -V, --version
             Show version and exit.
-        [32m--completions[39m <bash,zsh,fish>
+        --completions <bash,zsh,fish>
             Generate shell completions.

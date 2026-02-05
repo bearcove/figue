@@ -336,5 +336,5 @@ fn test_completions_help_shows_enum_variants() {
     let help = figue::generate_help::<Args>(&figue::HelpConfig::default());
 
     // Snapshot the help to show that --completions displays <bash,zsh,fish>
-    insta::assert_snapshot!(help);
+    assert_diag_snapshot!(help);
 }
