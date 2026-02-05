@@ -57,10 +57,11 @@ pub fn build_corrected_command_diagnostics(
     use crate::span::Span;
 
     let cli_text = cli_args.unwrap_or("");
-    let mut diagnostics = Vec::new();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
-    // For each missing field, create diagnostic pointing to corrected command
-    for field in missing {
+    // Handle the first missing field (most common case)
+    // Multiple missing would need a different UI approach
+    if let Some(field) = missing.first() {
         // Build the corrected command with the missing argument
         let missing_arg_text = if let Some(cli_flag) = &field.cli_flag {
             if cli_flag.starts_with('<') && cli_flag.ends_with('>') {
@@ -99,7 +100,6 @@ pub fn build_corrected_command_diagnostics(
         } else {
             cli_text.len() + 1
         };
-        let missing_arg_end = missing_arg_start + missing_arg_text.len();
 
         // Use the field documentation as the message
         let message = field
@@ -107,109 +107,24 @@ pub fn build_corrected_command_diagnostics(
             .clone()
             .unwrap_or_else(|| "missing required argument".to_string());
 
-        diagnostics.push(Diagnostic {
+        let diagnostic = Diagnostic {
             message,
             path: None,
             span: Some(Span::new(missing_arg_start, missing_arg_text.len())),
             severity: Severity::Error,
-        });
-
-        // Only handle the first missing field for now (most common case)
-        // Multiple missing would need a different UI approach
-        return CorrectedCommandInfo {
-            corrected_source: corrected_command,
-            diagnostics,
         };
-    }
 
-    // No missing fields - return empty
-    CorrectedCommandInfo {
-        corrected_source: cli_text.to_string(),
-        diagnostics: vec![],
-    }
-}
-
-/// Format missing CLI arguments with a visual mockup showing what command should look like.
-///
-/// This creates a user-friendly error that shows:
-/// 1. The actual command they typed (if any)
-/// 2. What's missing with visual indicators
-/// 3. A concrete example of what the complete command should look like
-///
-/// # Arguments
-/// * `missing` - List of missing field information
-/// * `cli_args` - Optional CLI args string. None if no arguments were provided.
-pub fn format_missing_cli_args_with_mockup(
-    missing: &[MissingFieldInfo],
-    cli_args: Option<&str>,
-) -> String {
-    use owo_colors::OwoColorize;
-    use std::fmt::Write;
-
-    if missing.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-
-    // Show what they typed
-    writeln!(output, "Missing required arguments\n").unwrap();
-
-    // Only show "You provided:" if arguments were actually provided
-    if let Some(args) = cli_args {
-        writeln!(output, "You provided:").unwrap();
-        writeln!(output, "  {}\n", args.dimmed()).unwrap();
-    }
-
-    // Show what's missing
-    writeln!(output, "Missing:").unwrap();
-    for field in missing {
-        if let Some(cli_flag) = &field.cli_flag {
-            write!(output, "  {} ", cli_flag.red().bold()).unwrap();
-            if let Some(doc) = &field.doc_comment {
-                writeln!(output, "  # {}", doc.dimmed()).unwrap();
-            } else {
-                writeln!(output).unwrap();
-            }
+        CorrectedCommandInfo {
+            corrected_source: corrected_command,
+            diagnostics: vec![diagnostic],
+        }
+    } else {
+        // No missing fields - return empty
+        CorrectedCommandInfo {
+            corrected_source: cli_text.to_string(),
+            diagnostics: vec![],
         }
     }
-
-    // Build example command
-    writeln!(output, "\nExample usage:").unwrap();
-
-    // Determine what to show as the base command
-    let mut example_parts = match cli_args {
-        Some(args) => vec![args.to_string()],
-        None => {
-            // Try to get the actual program name from std::env
-            let program_name = std::env::args()
-                .next()
-                .and_then(|path| {
-                    std::path::Path::new(&path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "program".to_string());
-            vec![program_name]
-        }
-    };
-
-    for field in missing {
-        if let Some(cli_flag) = &field.cli_flag {
-            if cli_flag.starts_with('<') && cli_flag.ends_with('>') {
-                // Positional argument like <name> - keep the brackets
-                example_parts.push(cli_flag.clone());
-            } else if cli_flag.starts_with("--") {
-                // Named argument like --region
-                let flag_name = cli_flag.trim_start_matches("--");
-                example_parts.push(format!("{} <{}>", cli_flag, flag_name));
-            }
-        }
-    }
-    writeln!(output, "  {}", example_parts.join(" ").green()).unwrap();
-
-    output
 }
 
 /// Collect missing required fields by walking the schema and checking against the ConfigValue.

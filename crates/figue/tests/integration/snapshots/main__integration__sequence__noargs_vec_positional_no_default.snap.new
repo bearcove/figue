@@ -1,0 +1,12 @@
+---
+source: crates/figue/tests/integration/sequence.rs
+assertion_line: 68
+expression: "$crate :: common :: strip_ansi(& err.to_string())"
+---
+Error: Files to process (at least one required)
+   ╭─[ <suggestion>:1:23 ]
+   │
+ 1 │ main-138217976bbdb088 <files>
+   │                       ───┬───  
+   │                          ╰───── Files to process (at least one required)
+───╯
