@@ -57,7 +57,6 @@ pub fn build_corrected_command_diagnostics(
     use crate::span::Span;
 
     let cli_text = cli_args.unwrap_or("");
-    let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Handle the first missing field (most common case)
     // Multiple missing would need a different UI approach

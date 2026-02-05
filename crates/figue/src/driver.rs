@@ -428,10 +428,21 @@ impl<T: Facet<'static>> Driver<T> {
 
             if all_cli_missing {
                 // Use corrected command as source with proper diagnostics
-                let corrected = build_corrected_command_diagnostics(
+                let mut corrected = build_corrected_command_diagnostics(
                     &missing_fields,
                     cli_args_source.as_deref(),
                 );
+
+                // Add help hint if the schema has a help field
+                if self.config.schema.special().help.is_some() {
+                    corrected.diagnostics.push(Diagnostic {
+                        message: "Run with --help for usage information.".to_string(),
+                        label: None,
+                        path: None,
+                        span: None,
+                        severity: Severity::Note,
+                    });
+                }
 
                 return DriverOutcome::err(DriverError::Failed {
                     report: Box::new(DriverReport {

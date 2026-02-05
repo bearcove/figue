@@ -26,6 +26,7 @@ fn test_subcommand_missing_required_positional() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// Initialize a new project
         Init(InitArgs),
@@ -75,6 +76,7 @@ fn test_subcommand_with_partial_input() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Init(InitArgs),
     }
@@ -113,6 +115,7 @@ fn test_subcommand_unexpected_extra_positional() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Init(InitArgs),
     }
@@ -144,6 +147,7 @@ fn test_subcommand_multiple_missing_positionals() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Create(CreateArgs),
     }
@@ -182,6 +186,7 @@ fn test_subcommand_missing_required_named() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Connect(ConnectArgs),
     }
@@ -216,6 +221,7 @@ fn test_unknown_subcommand_with_suggestion() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// Initialize a new project
         Init(InitArgs),
@@ -254,6 +260,7 @@ fn test_nested_subcommand_missing_required() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         /// Repository operations
         Repo(RepoArgs),
@@ -267,6 +274,7 @@ fn test_nested_subcommand_missing_required() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum RepoAction {
         /// Clone a repository
         Clone(CloneArgs),
@@ -300,6 +308,7 @@ fn test_subcommand_mixed_missing_arguments() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Deploy(DeployArgs),
     }
@@ -341,6 +350,7 @@ fn test_no_subcommand_provided() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Init(InitArgs),
         Build(BuildArgs),
@@ -377,6 +387,7 @@ fn test_subcommand_positional_looks_like_flag() {
 
     #[derive(Facet, Debug)]
     #[repr(u8)]
+    #[allow(dead_code)]
     enum Command {
         Create(CreateArgs),
     }

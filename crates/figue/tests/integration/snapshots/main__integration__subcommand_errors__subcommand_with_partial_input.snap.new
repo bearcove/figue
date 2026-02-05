@@ -1,9 +1,9 @@
 ---
 source: crates/figue/tests/integration/subcommand_errors.rs
-assertion_line: 96
+assertion_line: 98
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Project description
+Error: missing required argument
    ╭─[ <suggestion>:1:16 ]
    │
  1 │ init myproject <description>

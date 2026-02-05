@@ -1,9 +1,9 @@
 ---
 source: crates/figue/tests/integration/subcommand_errors.rs
-assertion_line: 286
+assertion_line: 294
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-Error: Repository URL
+Error: missing required argument
    ╭─[ <suggestion>:1:12 ]
    │
  1 │ repo clone <url>
