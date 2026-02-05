@@ -2,10 +2,10 @@
 source: crates/figue/tests/integration/simple.rs
 expression: "$crate :: common :: strip_ansi(& help.to_string())"
 ---
-/Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088
+main
 
 USAGE:
-    /Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088 [OPTIONS]
+    main [OPTIONS]
 
 OPTIONS:
         --name <STRING>

@@ -2,10 +2,10 @@
 source: crates/figue/tests/integration/subcommand_errors.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
-/Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088
+main
 
 USAGE:
-    /Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088 [OPTIONS] <COMMAND>
+    main [OPTIONS] <COMMAND>
 
 OPTIONS:
     -h, --help

@@ -1,13 +1,13 @@
 ---
 source: crates/figue/tests/integration/help.rs
-expression: "$crate :: common ::\nstrip_binary_paths(& $crate :: common :: strip_ansi(& help))"
+expression: "$crate :: common :: strip_ansi(& help)"
 ---
-<PROGRAM>
+main
 
 CLI with subcommands for testing subcommand-specific help
 
 USAGE:
-    <PROGRAM>
+    main [OPTIONS] <COMMAND>
 
 OPTIONS:
     -h, --help

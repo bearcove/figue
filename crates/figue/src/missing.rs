@@ -8,11 +8,20 @@ use crate::schema::{
 use heck::ToKebabCase;
 use heck::ToShoutySnakeCase;
 
-/// Strip the hash suffix from test binary names (e.g., "main-138217976bbdb088" -> "main").
+/// Normalize a program name for display in error messages and help text.
 ///
-/// Cargo test binaries have a suffix like "-<16-hex-chars>" which changes between builds.
-/// This function detects and removes that suffix to ensure stable test output.
-fn strip_test_binary_hash(name: &str) -> String {
+/// This function:
+/// 1. Extracts just the filename from a full path
+/// 2. Strips Cargo test binary hash suffixes (e.g., "main-138217976bbdb088" -> "main")
+///
+/// This ensures stable, readable output in both tests and help messages.
+pub fn normalize_program_name(path: &str) -> String {
+    // Extract just the filename from the path
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+
     // Check if the name ends with a dash followed by exactly 16 hex characters
     if let Some(dash_pos) = name.rfind('-') {
         let suffix = &name[dash_pos + 1..];
@@ -96,12 +105,7 @@ pub fn build_corrected_command_diagnostics(
             // Get program name
             let program_name = std::env::args()
                 .next()
-                .and_then(|path| {
-                    std::path::Path::new(&path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| strip_test_binary_hash(s))
-                })
+                .map(|path| normalize_program_name(&path))
                 .unwrap_or_else(|| "program".to_string());
             format!("{} {}", program_name, missing_arg_text)
         } else {
@@ -1442,31 +1446,46 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_test_binary_hash() {
-        // Test with cargo test binary pattern
-        assert_eq!(strip_test_binary_hash("main-138217976bbdb088"), "main");
-        assert_eq!(strip_test_binary_hash("main-b36e7ccd11ac5f87"), "main");
+    fn test_normalize_program_name() {
+        // Test with cargo test binary pattern and full path
+        assert_eq!(
+            normalize_program_name(
+                "/Users/amos/bearcove/figue/target/debug/deps/main-138217976bbdb088"
+            ),
+            "main"
+        );
+        assert_eq!(
+            normalize_program_name(
+                "/home/runner/work/figue/figue/target/debug/deps/main-b36e7ccd11ac5f87"
+            ),
+            "main"
+        );
+
+        // Test with just binary name and hash
+        assert_eq!(normalize_program_name("main-138217976bbdb088"), "main");
+        assert_eq!(normalize_program_name("main-b36e7ccd11ac5f87"), "main");
 
         // Test with regular binary names (no hash)
-        assert_eq!(strip_test_binary_hash("myapp"), "myapp");
-        assert_eq!(strip_test_binary_hash("my-app"), "my-app");
+        assert_eq!(normalize_program_name("myapp"), "myapp");
+        assert_eq!(normalize_program_name("my-app"), "my-app");
+        assert_eq!(normalize_program_name("/usr/local/bin/myapp"), "myapp");
 
         // Test with names that have dashes but not the hash pattern
-        assert_eq!(strip_test_binary_hash("my-app-test"), "my-app-test");
-        assert_eq!(strip_test_binary_hash("app-v1-final"), "app-v1-final");
+        assert_eq!(normalize_program_name("my-app-test"), "my-app-test");
+        assert_eq!(normalize_program_name("app-v1-final"), "app-v1-final");
 
         // Test with hash that's too short
-        assert_eq!(strip_test_binary_hash("app-123abc"), "app-123abc");
+        assert_eq!(normalize_program_name("app-123abc"), "app-123abc");
 
         // Test with hash that's too long
         assert_eq!(
-            strip_test_binary_hash("app-123456789abcdef01"),
+            normalize_program_name("app-123456789abcdef01"),
             "app-123456789abcdef01"
         );
 
         // Test with non-hex characters
         assert_eq!(
-            strip_test_binary_hash("app-123456789abcdexg"),
+            normalize_program_name("app-123456789abcdexg"),
             "app-123456789abcdexg"
         );
     }
