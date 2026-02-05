@@ -183,33 +183,31 @@ fn collect_missing_in_arg_level(
                 env_var: None,
                 env_aliases: Vec::new(),
             });
-        } else if let Some(subcommand_value) = obj_map.get(subcommand_field) {
+        } else if let Some(ConfigValue::Enum(sourced)) = obj_map.get(subcommand_field) {
             // Subcommand is present - recursively check its arguments
-            if let ConfigValue::Enum(sourced) = subcommand_value {
-                let enum_value = &sourced.value;
-                let variant_name = &enum_value.variant;
+            let enum_value = &sourced.value;
+            let variant_name = &enum_value.variant;
 
-                // Find the matching subcommand schema
-                if let Some(subcommand_schema) = arg_level
-                    .subcommands()
-                    .iter()
-                    .find(|(name, _)| name.as_str() == variant_name)
-                    .map(|(_, schema)| schema)
-                {
-                    // Recursively check the subcommand's arguments
-                    let subcommand_path = if path_prefix.is_empty() {
-                        format!("{}::{}", subcommand_field, variant_name)
-                    } else {
-                        format!("{}.{}::{}", path_prefix, subcommand_field, variant_name)
-                    };
+            // Find the matching subcommand schema
+            if let Some(subcommand_schema) = arg_level
+                .subcommands()
+                .iter()
+                .find(|(name, _)| name.as_str() == variant_name)
+                .map(|(_, schema)| schema)
+            {
+                // Recursively check the subcommand's arguments
+                let subcommand_path = if path_prefix.is_empty() {
+                    format!("{}::{}", subcommand_field, variant_name)
+                } else {
+                    format!("{}.{}::{}", path_prefix, subcommand_field, variant_name)
+                };
 
-                    collect_missing_in_arg_level(
-                        &enum_value.fields,
-                        subcommand_schema.args(),
-                        &subcommand_path,
-                        missing,
-                    );
-                }
+                collect_missing_in_arg_level(
+                    &enum_value.fields,
+                    subcommand_schema.args(),
+                    &subcommand_path,
+                    missing,
+                );
             }
         }
     }
