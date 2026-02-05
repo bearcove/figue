@@ -43,7 +43,7 @@ struct SimpleArgs {
     verbose: bool,
 
     /// Number of parallel jobs to run
-    #[facet(default, args::named, args::short = 'j')]
+    #[facet(default, args::named, args::short = 'j', args::label = "count")]
     jobs: Option<usize>,
 
     /// Input file to process

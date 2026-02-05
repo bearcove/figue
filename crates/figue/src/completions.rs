@@ -25,7 +25,7 @@ pub enum Shell {
 /// Generate shell completion script for a Facet type.
 ///
 /// This is a convenience function that builds a Schema internally.
-/// If you already have a Schema, use `generate_completions_for_schema` instead.
+/// If you already have a Schema, use [generate_completions_for_schema] instead.
 pub fn generate_completions<T: Facet<'static>>(shell: Shell, program_name: &str) -> String {
     generate_completions_for_shape(T::SHAPE, shell, program_name)
 }
@@ -33,7 +33,7 @@ pub fn generate_completions<T: Facet<'static>>(shell: Shell, program_name: &str)
 /// Generate shell completion script for a shape.
 ///
 /// This is a convenience function that builds a Schema internally.
-/// If you already have a Schema, use `generate_completions_for_schema` instead.
+/// If you already have a Schema, use [generate_completions_for_schema] instead.
 pub fn generate_completions_for_shape(
     shape: &'static facet_core::Shape,
     shell: Shell,
@@ -50,7 +50,7 @@ pub fn generate_completions_for_shape(
     generate_completions_for_schema(&schema, shell, program_name)
 }
 
-/// Generate shell completion script from a Schema.
+/// Generate shell completion script from a [Schema].
 pub fn generate_completions_for_schema(
     schema: &Schema,
     shell: Shell,

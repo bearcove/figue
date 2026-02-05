@@ -297,10 +297,11 @@ fn write_arg_help(out: &mut String, arg: &ArgSchema) {
 
         // Show value placeholder for non-bool, non-counted types
         if !is_counted && !arg.value().is_bool() {
-            out.push_str(&format!(
-                " <{}>",
-                arg.value().type_identifier().to_uppercase()
-            ));
+            let placeholder = arg
+                .label()
+                .unwrap_or_else(|| arg.value().type_identifier())
+                .to_uppercase();
+            out.push_str(&format!(" <{}>", placeholder));
         }
     }
 
@@ -430,6 +431,23 @@ mod tests {
     enum TupleVariantCommand {
         /// Start the server
         Serve(ServeArgs),
+    }
+
+    #[test]
+    fn test_label_overrides_placeholder() {
+        #[derive(Facet)]
+        struct TDArgs {
+            /// Input path
+            #[facet(args::named, args::label = "PATH")]
+            input: std::path::PathBuf,
+        }
+        let schema = Schema::from_shape(TDArgs::SHAPE).unwrap();
+        let help = generate_help_for_subcommand(&schema, &[], &HelpConfig::default());
+        // Only assert on the placeholder to avoid issues with ANSI color codes around the flag name
+        assert!(
+            help.contains("<PATH>"),
+            "help should use custom label placeholder"
+        );
     }
 
     #[test]
