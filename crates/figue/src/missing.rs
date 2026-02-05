@@ -27,6 +27,59 @@ pub struct MissingFieldInfo {
     pub env_aliases: Vec<String>,
 }
 
+/// Format missing CLI arguments with a visual mockup showing what command should look like.
+///
+/// This creates a user-friendly error that shows:
+/// 1. The actual command they typed
+/// 2. What's missing with visual indicators
+/// 3. A concrete example of what the complete command should look like
+pub fn format_missing_cli_args_with_mockup(missing: &[MissingFieldInfo], cli_args: &str) -> String {
+    use owo_colors::OwoColorize;
+    use std::fmt::Write;
+
+    if missing.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+
+    // Show what they typed
+    writeln!(output, "Error: Missing required arguments\n").unwrap();
+    writeln!(output, "You provided:").unwrap();
+    writeln!(output, "  {}\n", cli_args.dimmed()).unwrap();
+
+    // Show what's missing
+    writeln!(output, "Missing:").unwrap();
+    for field in missing {
+        if let Some(cli_flag) = &field.cli_flag {
+            write!(output, "  {} ", cli_flag.red().bold()).unwrap();
+            if let Some(doc) = &field.doc_comment {
+                writeln!(output, "  # {}", doc.dimmed()).unwrap();
+            } else {
+                writeln!(output).unwrap();
+            }
+        }
+    }
+
+    // Build example command
+    writeln!(output, "\nExample usage:").unwrap();
+    let mut example_parts = vec![cli_args.to_string()];
+    for field in missing {
+        if let Some(cli_flag) = &field.cli_flag {
+            if cli_flag.starts_with('<') && cli_flag.ends_with('>') {
+                // Positional argument like <name>
+                example_parts.push(cli_flag.trim_matches(|c| c == '<' || c == '>').to_string());
+            } else if cli_flag.starts_with("--") {
+                // Named argument like --region
+                example_parts.push(format!("{} <value>", cli_flag));
+            }
+        }
+    }
+    writeln!(output, "  {}", example_parts.join(" ").green()).unwrap();
+
+    output
+}
+
 /// Collect missing required fields by walking the schema and checking against the ConfigValue.
 /// A field is "missing" if it's not in the ConfigValue AND is not Option.
 ///
@@ -113,24 +166,52 @@ fn collect_missing_in_arg_level(
     }
 
     // Check subcommands if present and required
-    if let Some(subcommand_field) = arg_level.subcommand_field_name()
-        && !arg_level.subcommand_optional()
-        && obj_map.get(subcommand_field).is_none()
-    {
-        let field_path = if path_prefix.is_empty() {
-            subcommand_field.to_string()
-        } else {
-            format!("{}.{}", path_prefix, subcommand_field)
-        };
-        missing.push(MissingFieldInfo {
-            field_name: subcommand_field.to_string(),
-            field_path,
-            type_name: "Subcommand".to_string(),
-            doc_comment: None,
-            cli_flag: Some(format!("<{}>", subcommand_field.to_kebab_case())),
-            env_var: None,
-            env_aliases: Vec::new(),
-        });
+    if let Some(subcommand_field) = arg_level.subcommand_field_name() {
+        if !arg_level.subcommand_optional() && obj_map.get(subcommand_field).is_none() {
+            // Subcommand field itself is missing
+            let field_path = if path_prefix.is_empty() {
+                subcommand_field.to_string()
+            } else {
+                format!("{}.{}", path_prefix, subcommand_field)
+            };
+            missing.push(MissingFieldInfo {
+                field_name: subcommand_field.to_string(),
+                field_path,
+                type_name: "Subcommand".to_string(),
+                doc_comment: None,
+                cli_flag: Some(format!("<{}>", subcommand_field.to_kebab_case())),
+                env_var: None,
+                env_aliases: Vec::new(),
+            });
+        } else if let Some(subcommand_value) = obj_map.get(subcommand_field) {
+            // Subcommand is present - recursively check its arguments
+            if let ConfigValue::Enum(sourced) = subcommand_value {
+                let enum_value = &sourced.value;
+                let variant_name = &enum_value.variant;
+
+                // Find the matching subcommand schema
+                if let Some(subcommand_schema) = arg_level
+                    .subcommands()
+                    .iter()
+                    .find(|(name, _)| name.as_str() == variant_name)
+                    .map(|(_, schema)| schema)
+                {
+                    // Recursively check the subcommand's arguments
+                    let subcommand_path = if path_prefix.is_empty() {
+                        format!("{}::{}", subcommand_field, variant_name)
+                    } else {
+                        format!("{}.{}::{}", path_prefix, subcommand_field, variant_name)
+                    };
+
+                    collect_missing_in_arg_level(
+                        &enum_value.fields,
+                        subcommand_schema.args(),
+                        &subcommand_path,
+                        missing,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -368,6 +449,9 @@ fn type_name_from_config_value_schema(schema: &ConfigValueSchema) -> String {
 /// This produces a focused list of just the missing fields with their paths,
 /// types, and documentation (if available), so users can quickly see what
 /// needs to be provided without scrolling through the entire config dump.
+///
+/// For CLI-only missing fields (when all missing fields have cli_flag set),
+/// prefer using `format_missing_cli_args_with_mockup` for a more user-friendly display.
 pub fn format_missing_fields_summary(missing: &[MissingFieldInfo]) -> String {
     use owo_colors::OwoColorize;
     use std::fmt::Write;

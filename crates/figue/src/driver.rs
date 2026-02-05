@@ -32,7 +32,9 @@ use crate::env_subst::{EnvSubstError, RealEnv, substitute_env_vars};
 use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
-use crate::missing::{collect_missing_fields, format_missing_fields_summary};
+use crate::missing::{
+    collect_missing_fields, format_missing_cli_args_with_mockup, format_missing_fields_summary,
+};
 use crate::path::Path;
 use crate::provenance::{FileResolution, Override, Provenance};
 use crate::span::Span;
@@ -415,62 +417,75 @@ impl<T: Facet<'static>> Driver<T> {
                 return DriverOutcome::err(DriverError::Help { text: help });
             }
 
-            // Show dump with missing field markers (includes Sources header)
-            let mut dump_buf = Vec::new();
-            let resolution = file_resolution.as_ref().cloned().unwrap_or_default();
-            dump_config_with_schema(
-                &mut dump_buf,
-                &value_with_defaults,
-                &resolution,
-                &self.config.schema,
-            );
-            let dump =
-                String::from_utf8(dump_buf).unwrap_or_else(|_| "error rendering dump".into());
+            // Check if all missing fields are CLI arguments (not config/env)
+            // If so, use the more user-friendly CLI-focused error format
+            let all_cli_missing =
+                has_missing && !has_unknown && missing_fields.iter().all(|f| f.cli_flag.is_some());
 
-            // Build error message with both missing fields and unknown keys
-            let mut message_parts = Vec::new();
-
-            if has_unknown {
-                message_parts.push("Unknown configuration keys:".to_string());
-            }
-            if has_missing {
-                message_parts.push("Missing required fields:".to_string());
-            }
-
-            let header = message_parts.join(" / ");
-
-            // Format the summary of missing fields
-            let missing_summary = if has_missing {
+            let message = if all_cli_missing {
+                // Use CLI-focused format with visual mockup
                 format!(
-                    "\nMissing:\n{}",
-                    format_missing_fields_summary(&missing_fields)
+                    "{}\nRun with --help for usage information.",
+                    format_missing_cli_args_with_mockup(&missing_fields, &cli_args_source)
                 )
             } else {
-                String::new()
-            };
+                // Use detailed format with config dump
+                let mut dump_buf = Vec::new();
+                let resolution = file_resolution.as_ref().cloned().unwrap_or_default();
+                dump_config_with_schema(
+                    &mut dump_buf,
+                    &value_with_defaults,
+                    &resolution,
+                    &self.config.schema,
+                );
+                let dump =
+                    String::from_utf8(dump_buf).unwrap_or_else(|_| "error rendering dump".into());
 
-            // Format the summary of unknown keys with suggestions
-            let unknown_summary = if has_unknown {
-                let config_schema = self.config.schema.config();
-                let unknown_list: Vec<String> = unknown_keys
-                    .iter()
-                    .map(|uk| {
-                        let source = uk.provenance.source_description();
-                        let suggestion = config_schema
-                            .map(|cs| crate::suggest::suggest_config_path(cs, &uk.key))
-                            .unwrap_or_default();
-                        format!("  {} (from {}){}", uk.key.join("."), source, suggestion)
-                    })
-                    .collect();
-                format!("\nUnknown keys:\n{}", unknown_list.join("\n"))
-            } else {
-                String::new()
-            };
+                // Build error message with both missing fields and unknown keys
+                let mut message_parts = Vec::new();
 
-            let message = format!(
-                "{}\n\n{}{}{}\nRun with --help for usage information.",
-                header, dump, missing_summary, unknown_summary
-            );
+                if has_unknown {
+                    message_parts.push("Unknown configuration keys:".to_string());
+                }
+                if has_missing {
+                    message_parts.push("Missing required fields:".to_string());
+                }
+
+                let header = message_parts.join(" / ");
+
+                // Format the summary of missing fields
+                let missing_summary = if has_missing {
+                    format!(
+                        "\nMissing:\n{}",
+                        format_missing_fields_summary(&missing_fields)
+                    )
+                } else {
+                    String::new()
+                };
+
+                // Format the summary of unknown keys with suggestions
+                let unknown_summary = if has_unknown {
+                    let config_schema = self.config.schema.config();
+                    let unknown_list: Vec<String> = unknown_keys
+                        .iter()
+                        .map(|uk| {
+                            let source = uk.provenance.source_description();
+                            let suggestion = config_schema
+                                .map(|cs| crate::suggest::suggest_config_path(cs, &uk.key))
+                                .unwrap_or_default();
+                            format!("  {} (from {}){}", uk.key.join("."), source, suggestion)
+                        })
+                        .collect();
+                    format!("\nUnknown keys:\n{}", unknown_list.join("\n"))
+                } else {
+                    String::new()
+                };
+
+                format!(
+                    "{}\n\n{}{}{}\nRun with --help for usage information.",
+                    header, dump, missing_summary, unknown_summary
+                )
+            };
 
             return DriverOutcome::err(DriverError::Failed {
                 report: Box::new(DriverReport {
