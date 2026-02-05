@@ -3,9 +3,9 @@ source: crates/figue/tests/integration/ariadne.rs
 expression: ariadne_output
 ---
 Error: missing required argument
-   ╭─[ <suggestion>:1:23 ]
+   ╭─[ <suggestion>:1:6 ]
    │
- 1 │ main-138217976bbdb088 --required-field <required-field>
-   │                       ────────────────┬────────────────  
-   │                                       ╰────────────────── missing required argument
+ 1 │ main --required-field <required-field>
+   │      ────────────────┬────────────────  
+   │                      ╰────────────────── missing required argument
 ───╯

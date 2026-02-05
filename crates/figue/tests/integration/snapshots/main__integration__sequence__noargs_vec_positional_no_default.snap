@@ -3,9 +3,9 @@ source: crates/figue/tests/integration/sequence.rs
 expression: "$crate :: common :: strip_ansi(& err.to_string())"
 ---
 Error: missing required argument
-   ╭─[ <suggestion>:1:23 ]
+   ╭─[ <suggestion>:1:6 ]
    │
- 1 │ main-138217976bbdb088 <files>
-   │                       ───┬───  
-   │                          ╰───── Files to process (at least one required)
+ 1 │ main <files>
+   │      ───┬───  
+   │         ╰───── Files to process (at least one required)
 ───╯

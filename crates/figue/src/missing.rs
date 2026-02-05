@@ -8,6 +8,21 @@ use crate::schema::{
 use heck::ToKebabCase;
 use heck::ToShoutySnakeCase;
 
+/// Strip the hash suffix from test binary names (e.g., "main-138217976bbdb088" -> "main").
+///
+/// Cargo test binaries have a suffix like "-<16-hex-chars>" which changes between builds.
+/// This function detects and removes that suffix to ensure stable test output.
+fn strip_test_binary_hash(name: &str) -> String {
+    // Check if the name ends with a dash followed by exactly 16 hex characters
+    if let Some(dash_pos) = name.rfind('-') {
+        let suffix = &name[dash_pos + 1..];
+        if suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit()) {
+            return name[..dash_pos].to_string();
+        }
+    }
+    name.to_string()
+}
+
 /// The kind of field that is missing - determines how errors should be formatted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingFieldKind {
@@ -85,7 +100,7 @@ pub fn build_corrected_command_diagnostics(
                     std::path::Path::new(&path)
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
+                        .map(|s| strip_test_binary_hash(s))
                 })
                 .unwrap_or_else(|| "program".to_string());
             format!("{} {}", program_name, missing_arg_text)
@@ -1424,5 +1439,35 @@ mod tests {
 
         assert_eq!(missing.len(), 1);
         assert!(!missing[0].type_name.is_empty(), "Type name should be set");
+    }
+
+    #[test]
+    fn test_strip_test_binary_hash() {
+        // Test with cargo test binary pattern
+        assert_eq!(strip_test_binary_hash("main-138217976bbdb088"), "main");
+        assert_eq!(strip_test_binary_hash("main-b36e7ccd11ac5f87"), "main");
+
+        // Test with regular binary names (no hash)
+        assert_eq!(strip_test_binary_hash("myapp"), "myapp");
+        assert_eq!(strip_test_binary_hash("my-app"), "my-app");
+
+        // Test with names that have dashes but not the hash pattern
+        assert_eq!(strip_test_binary_hash("my-app-test"), "my-app-test");
+        assert_eq!(strip_test_binary_hash("app-v1-final"), "app-v1-final");
+
+        // Test with hash that's too short
+        assert_eq!(strip_test_binary_hash("app-123abc"), "app-123abc");
+
+        // Test with hash that's too long
+        assert_eq!(
+            strip_test_binary_hash("app-123456789abcdef01"),
+            "app-123456789abcdef01"
+        );
+
+        // Test with non-hex characters
+        assert_eq!(
+            strip_test_binary_hash("app-123456789abcdexg"),
+            "app-123456789abcdexg"
+        );
     }
 }
