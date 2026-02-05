@@ -8,6 +8,15 @@ use crate::schema::{
 use heck::ToKebabCase;
 use heck::ToShoutySnakeCase;
 
+/// The kind of field that is missing - determines how errors should be formatted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingFieldKind {
+    /// A direct CLI argument (flag or positional) at the top level or in a subcommand
+    CliArg,
+    /// A field in a config struct (has layered sources: file, env, CLI overrides)
+    ConfigField,
+}
+
 /// Information about a missing required field.
 #[derive(Debug, Clone)]
 pub struct MissingFieldInfo {
@@ -25,6 +34,93 @@ pub struct MissingFieldInfo {
     pub env_var: Option<String>,
     /// Environment variable aliases (e.g., ["DATABASE_URL", "DB_URL"])
     pub env_aliases: Vec<String>,
+    /// What kind of field this is - determines error formatting strategy
+    pub kind: MissingFieldKind,
+}
+
+/// Format missing CLI arguments using Ariadne for visual span-based errors.
+///
+/// This creates an Ariadne report showing:
+/// 1. The command line with a span pointing to where the missing argument should be
+/// 2. The field documentation as a note
+/// 3. An example of the correct usage
+pub fn format_missing_cli_args_ariadne(
+    missing: &[MissingFieldInfo],
+    cli_args: Option<&str>,
+) -> String {
+    use ariadne::{Color, Label, Report, ReportKind, Source};
+
+    if missing.is_empty() {
+        return String::new();
+    }
+
+    let cli_text = cli_args.unwrap_or("");
+    let mut output = Vec::new();
+
+    // For each missing field, create an Ariadne report
+    for field in missing {
+        // Build the corrected command with the missing argument
+        let missing_arg_text = if let Some(cli_flag) = &field.cli_flag {
+            if cli_flag.starts_with('<') && cli_flag.ends_with('>') {
+                // Positional argument like <name>
+                cli_flag.clone()
+            } else if cli_flag.starts_with("--") {
+                // Named argument like --region
+                let flag_name = cli_flag.trim_start_matches("--");
+                format!("{} <{}>", cli_flag, flag_name)
+            } else {
+                cli_flag.clone()
+            }
+        } else {
+            format!("<{}>", field.field_name)
+        };
+
+        let corrected_command = if cli_text.is_empty() {
+            // Get program name
+            let program_name = std::env::args()
+                .next()
+                .and_then(|path| {
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "program".to_string());
+            format!("{} {}", program_name, missing_arg_text)
+        } else {
+            format!("{} {}", cli_text, missing_arg_text)
+        };
+
+        // Calculate the span of the missing argument in the corrected command
+        let missing_arg_start = cli_text.len() + if cli_text.is_empty() { 0 } else { 1 };
+        let missing_arg_end = missing_arg_start + missing_arg_text.len();
+        let span = missing_arg_start..missing_arg_end;
+
+        let mut report = Report::build(ReportKind::Error, span.clone())
+            .with_message("missing required argument");
+
+        // Use the field documentation in the label
+        let label_msg = field.doc_comment.as_deref().unwrap_or_else(|| {
+            if let Some(cli_flag) = &field.cli_flag {
+                cli_flag
+            } else {
+                &field.field_name
+            }
+        });
+
+        report = report.with_label(
+            Label::new(span)
+                .with_message(label_msg)
+                .with_color(Color::Green),
+        );
+
+        // Write the report using the corrected command as the source
+        let source = Source::from(corrected_command);
+        report.finish().write(source, &mut output).unwrap();
+        output.push(b'\n');
+    }
+
+    String::from_utf8(output).unwrap_or_else(|_| String::new())
 }
 
 /// Format missing CLI arguments with a visual mockup showing what command should look like.
@@ -151,6 +247,7 @@ pub fn collect_missing_fields(
                     cli_flag: None,
                     env_var: None,
                     env_aliases: Vec::new(),
+                    kind: MissingFieldKind::ConfigField,
                 });
             }
         } else {
@@ -191,6 +288,7 @@ fn collect_missing_in_arg_level(
                 cli_flag,
                 env_var: None, // CLI args don't have env vars
                 env_aliases: Vec::new(),
+                kind: MissingFieldKind::CliArg,
             });
         }
     }
@@ -212,6 +310,7 @@ fn collect_missing_in_arg_level(
                 cli_flag: Some(format!("<{}>", subcommand_field.to_kebab_case())),
                 env_var: None,
                 env_aliases: Vec::new(),
+                kind: MissingFieldKind::CliArg,
             });
         } else if let Some(ConfigValue::Enum(sourced)) = obj_map.get(subcommand_field) {
             // Subcommand is present - recursively check its arguments
@@ -370,6 +469,7 @@ fn collect_missing_in_config_value(
                                     cli_flag: None,
                                     env_var: None,
                                     env_aliases: field_schema.env_aliases().to_vec(),
+                                    kind: MissingFieldKind::ConfigField,
                                 });
                             }
                         }
@@ -451,6 +551,7 @@ fn check_missing_field(
             cli_flag,
             env_var,
             env_aliases: field_schema.env_aliases().to_vec(),
+            kind: MissingFieldKind::ConfigField,
         });
     }
 }

@@ -33,7 +33,7 @@ use crate::help::generate_help_for_subcommand;
 use crate::layers::{cli::parse_cli, env::parse_env, file::parse_file};
 use crate::merge::merge_layers;
 use crate::missing::{
-    collect_missing_fields, format_missing_cli_args_with_mockup, format_missing_fields_summary,
+    collect_missing_fields, format_missing_cli_args_ariadne, format_missing_fields_summary,
 };
 use crate::path::Path;
 use crate::provenance::{FileResolution, Override, Provenance};
@@ -417,19 +417,19 @@ impl<T: Facet<'static>> Driver<T> {
                 return DriverOutcome::err(DriverError::Help { text: help });
             }
 
-            // Check if all missing fields are CLI arguments (not config/env)
-            // If so, use the more user-friendly CLI-focused error format
-            let all_cli_missing =
-                has_missing && !has_unknown && missing_fields.iter().all(|f| f.cli_flag.is_some());
+            // Check if all missing fields are simple CLI arguments (not config fields)
+            // Use the proper kind field to distinguish between CLI args and config fields
+            let all_cli_missing = has_missing
+                && !has_unknown
+                && missing_fields
+                    .iter()
+                    .all(|f| matches!(f.kind, crate::missing::MissingFieldKind::CliArg));
 
             let message = if all_cli_missing {
-                // Use CLI-focused format with visual mockup
+                // Use Ariadne-based format with visual spans
                 format!(
-                    "{}\nRun with --help for usage information.",
-                    format_missing_cli_args_with_mockup(
-                        &missing_fields,
-                        cli_args_source.as_deref()
-                    )
+                    "{}Run with --help for usage information.",
+                    format_missing_cli_args_ariadne(&missing_fields, cli_args_source.as_deref())
                 )
             } else {
                 // Use detailed format with config dump
