@@ -43,6 +43,7 @@ unicode-width = "0.2.2"
 strip-ansi-escapes = "0.2.1"
 strsim = "0.11"
 insta = "1"
+supports-color = "3"
 tempfile = "3"
 
 # Uncomment for local development with facet

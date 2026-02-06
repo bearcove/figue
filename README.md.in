@@ -35,9 +35,13 @@ Ok(())
 
 The entry point of figue is [`builder`] — let yourself be guided from there.
 
+## Color
+
+figue uses [facet-color](https://docs.rs/facet-color) for coloring output.
+
 ## Contributing
 
-Run `install/hooks.sh` to install pre-commit and pre-push hooks.
+Run `hooks/install.sh` to install pre-commit and pre-push hooks.
 
 ## Sponsors
 

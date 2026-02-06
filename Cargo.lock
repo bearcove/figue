@@ -657,6 +657,7 @@ dependencies = [
  "owo-colors",
  "strip-ansi-escapes",
  "strsim",
+ "supports-color 3.0.2",
  "tempfile",
  "tracing",
  "unicode-width",
