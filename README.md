@@ -35,6 +35,10 @@ Ok(())
 
 The entry point of figue is [`builder`] — let yourself be guided from there.
 
+## Contributing
+
+Run `install/hooks.sh` to install pre-commit and pre-push hooks.
+
 ## Sponsors
 
 Thanks to all individual sponsors:
