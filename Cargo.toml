@@ -17,8 +17,8 @@ categories = ["command-line-interface"]
 figue-attrs = { path = "crates/figue-attrs", version = "2.0.0" }
 
 # Facet ecosystem
-facet = { version = "0.44.0", features = ["indexmap", "camino", "net"] }
-facet-core = { version = "0.44.0" }
+facet = { version = "0.45", features = ["indexmap", "camino", "net"] }
+facet-core = { version = "0.45" }
 facet-format = { version = "0.44.0" }
 facet-json = { version = "0.44.0" }
 facet-reflect = { version = "0.44.0" }
