@@ -17,15 +17,15 @@ categories = ["command-line-interface"]
 figue-attrs = { path = "crates/figue-attrs", version = "2.0.2" }
 
 # Facet ecosystem
-facet = { version = "0.45", features = ["indexmap", "camino", "net"] }
-facet-core = { version = "0.45" }
-facet-format = { version = "0.44.0" }
-facet-json = { version = "0.44.0" }
-facet-reflect = { version = "0.44.0" }
-facet-pretty = { version = "0.44.0" }
-facet-error = { version = "0.44.0" }
-facet-solver = { version = "0.44.0" }
-facet-testhelpers = { version = "0.44.0" }
+facet = { version = "0.46", features = ["indexmap", "camino", "net"] }
+facet-core = { version = "0.46" }
+facet-format = { version = "0.47" }
+facet-json = { version = "0.46" }
+facet-reflect = { version = "0.46" }
+facet-pretty = { version = "0.46" }
+facet-error = { version = "0.46" }
+facet-solver = { version = "0.46" }
+facet-testhelpers = { version = "0.46" }
 
 # External dependencies
 camino = "1.1"
