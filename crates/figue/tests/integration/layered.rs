@@ -65,11 +65,13 @@ struct TlsConfig {
 fn test_layered_all_sources() {
     // Config file content (lowest priority after defaults)
     let config_json = r#"{
-        "host": "0.0.0.0",
-        "port": 3000,
-        "database": {
-            "url": "postgres://localhost/mydb",
-            "max_connections": 20
+        "config": {
+            "host": "0.0.0.0",
+            "port": 3000,
+            "database": {
+                "url": "postgres://localhost/mydb",
+                "max_connections": 20
+            }
         }
     }"#;
 
@@ -119,10 +121,12 @@ fn test_layered_all_sources() {
 fn test_layered_missing_required_field() {
     // Config file missing database.url (required field)
     let config_json = r#"{
-        "host": "127.0.0.1",
-        "port": 5000,
-        "database": {
-            "max_connections": 5
+        "config": {
+            "host": "127.0.0.1",
+            "port": 5000,
+            "database": {
+                "max_connections": 5
+            }
         }
     }"#;
 
@@ -144,12 +148,14 @@ fn test_layered_missing_required_field() {
 fn test_layered_cli_overrides_all() {
     // File sets everything
     let config_json = r#"{
-        "host": "file-host",
-        "port": 1111,
-        "database": {
-            "url": "postgres://file/db",
-            "max_connections": 100,
-            "timeout_secs": 999
+        "config": {
+            "host": "file-host",
+            "port": 1111,
+            "database": {
+                "url": "postgres://file/db",
+                "max_connections": 100,
+                "timeout_secs": 999
+            }
         }
     }"#;
 
@@ -406,16 +412,18 @@ fn test_layered_dump_shows_all_sources() {
     // This test shows missing required fields with values from multiple sources
     // Demonstrates: nested structs, enums with data, various sources, deep missing fields
     let config_json = r#"{
-        "host": "0.0.0.0",
-        "port": 3000,
-        "max_retries": 5,
-        "logging": {
-            "level": "debug",
-            "format": "Json"
-        },
-        "storage": {
-            "s3": {
-                "region": "eu-west-1"
+        "settings": {
+            "host": "0.0.0.0",
+            "port": 3000,
+            "max_retries": 5,
+            "logging": {
+                "level": "debug",
+                "format": "Json"
+            },
+            "storage": {
+                "s3": {
+                    "region": "eu-west-1"
+                }
             }
         }
     }"#;
