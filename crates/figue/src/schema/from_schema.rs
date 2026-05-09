@@ -222,6 +222,9 @@ fn extract_field_default(field: &Field) -> Option<crate::config_value::ConfigVal
             // Don't return null for types that shouldn't be null - that indicates
             // the serialization couldn't represent the default value properly
             if matches!(config_value, crate::config_value::ConfigValue::Null(_)) {
+                if let Some(value) = from_trait_vec_default(default_source, shape) {
+                    return Some(value);
+                }
                 tracing::debug!(
                     field = field.name,
                     "extract_field_default: serialized to null, skipping"
@@ -237,6 +240,9 @@ fn extract_field_default(field: &Field) -> Option<crate::config_value::ConfigVal
             }
         }
         Err(e) => {
+            if let Some(value) = from_trait_vec_default(default_source, shape) {
+                return Some(value);
+            }
             tracing::debug!(
                 field = field.name,
                 error = %e,
@@ -245,6 +251,25 @@ fn extract_field_default(field: &Field) -> Option<crate::config_value::ConfigVal
             None
         }
     }
+}
+
+fn from_trait_vec_default(
+    default_source: &facet_core::DefaultSource,
+    shape: &'static Shape,
+) -> Option<crate::config_value::ConfigValue> {
+    if !matches!(default_source, facet_core::DefaultSource::FromTrait)
+        || !matches!(shape.def, Def::List(_))
+    {
+        return None;
+    }
+
+    Some(crate::config_value::ConfigValue::Array(
+        crate::config_value::Sourced {
+            value: Vec::new(),
+            span: None,
+            provenance: Some(crate::provenance::Provenance::Default),
+        },
+    ))
 }
 
 fn docs_from_lines(lines: &'static [&'static str]) -> Docs {

@@ -74,6 +74,9 @@ struct FlattenedRunConfig {
     model: String,
 
     #[facet(default)]
+    tag: Vec<String>,
+
+    #[facet(default)]
     tui: bool,
 }
 
@@ -153,6 +156,10 @@ fn test_flattened_config_root_merges_namespaced_sources_then_deserializes_flat()
     let args = Driver::new(config).run().unwrap();
 
     assert!(args.run.tui, "flattened CLI flag should populate run.tui");
+    assert!(
+        args.run.tag.is_empty(),
+        "explicit Vec default inside flattened config root should be preserved"
+    );
     assert_eq!(
         args.run.model, "cli-model",
         "dotted CLI overrides should keep the config-root namespace and override env/file"
