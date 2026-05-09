@@ -38,7 +38,9 @@ use indexmap::IndexMap;
 use crate::config_value::{ConfigValue, EnumValue, Sourced};
 use crate::driver::{Diagnostic, LayerOutput, Severity};
 use crate::provenance::Provenance;
-use crate::schema::{ArgKind, ArgLevelSchema, ArgSchema, Schema, Subcommand};
+use crate::schema::{
+    ArgKind, ArgLevelSchema, ArgSchema, ConfigStructSchema, ConfigValueSchema, Schema, Subcommand,
+};
 use crate::value_builder::{LeafValue, ValueBuilder};
 
 // ============================================================================
@@ -181,6 +183,20 @@ struct ParentFlagLookup {
     is_bool: bool,
     /// Whether this is a counted flag
     is_counted: bool,
+}
+
+/// Parsed metadata for a dotted config override flag.
+struct ConfigOverrideTarget<'a> {
+    /// Flag name without the leading `--` and without a leading `no-`.
+    flag_name: &'a str,
+    /// Kebab-case config root name used on the CLI.
+    cli_root: String,
+    /// Effective config field name in the schema.
+    config_field_name: String,
+    /// Whether the flag used `--no-...`.
+    negated: bool,
+    /// Whether the target config value is a boolean.
+    is_bool: bool,
 }
 
 /// Parser context holding state during CLI parsing.
@@ -335,17 +351,20 @@ impl<'a> ParseContext<'a> {
         for config_schema in self.schema.configs() {
             if let Some(config_field_name) = config_schema.field_name() {
                 let cli_root = config_field_name.to_kebab_case();
-                if flag_name.starts_with(&cli_root)
-                    && flag_name.len() > cli_root.len()
-                    && flag_name.as_bytes()[cli_root.len()] == b'.'
+                if let Some((override_flag_name, negated)) =
+                    Self::config_override_flag_name(flag_name, &cli_root)
                 {
-                    self.parse_config_override(
-                        arg,
-                        flag_name,
-                        inline_value,
-                        &cli_root,
-                        config_field_name,
-                    );
+                    let path_str = &override_flag_name[cli_root.len() + 1..];
+                    let parts: Vec<&str> = path_str.split('.').collect();
+                    let is_bool = Self::config_path_is_bool(config_schema, &parts);
+                    let target = ConfigOverrideTarget {
+                        flag_name: override_flag_name,
+                        cli_root: cli_root.to_string(),
+                        config_field_name: config_field_name.to_string(),
+                        negated,
+                        is_bool,
+                    };
+                    self.parse_config_override(arg, inline_value, target);
                     return;
                 }
             }
@@ -455,6 +474,101 @@ impl<'a> ParseContext<'a> {
             let suggestion = crate::suggest::suggest_flag(flag_name, all_flags);
             self.emit_error(format!("unknown flag: --{}{}", flag_name, suggestion));
             self.index += 1;
+        }
+    }
+
+    fn config_override_flag_name<'b>(
+        flag_name: &'b str,
+        cli_root: &str,
+    ) -> Option<(&'b str, bool)> {
+        if Self::is_config_override_flag(flag_name, cli_root) {
+            Some((flag_name, false))
+        } else if let Some(negated_name) = flag_name.strip_prefix("no-")
+            && Self::is_config_override_flag(negated_name, cli_root)
+        {
+            Some((negated_name, true))
+        } else {
+            None
+        }
+    }
+
+    fn is_config_override_flag(flag_name: &str, cli_root: &str) -> bool {
+        flag_name.starts_with(cli_root)
+            && flag_name.len() > cli_root.len()
+            && flag_name.as_bytes()[cli_root.len()] == b'.'
+    }
+
+    fn config_path_is_bool(config_schema: &ConfigStructSchema, path: &[&str]) -> bool {
+        Self::resolve_config_value_schema(config_schema, path)
+            .is_some_and(ConfigValueSchema::is_bool)
+    }
+
+    fn resolve_config_value_schema<'s>(
+        config_schema: &'s ConfigStructSchema,
+        path: &[&str],
+    ) -> Option<&'s ConfigValueSchema> {
+        if path.is_empty() {
+            return None;
+        }
+
+        let segment = path[0];
+        let (_, field_schema) = config_schema
+            .fields()
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(segment) || key.to_kebab_case() == segment)?;
+
+        if path.len() == 1 {
+            return Some(field_schema.value());
+        }
+
+        Self::resolve_nested_config_value_schema(field_schema.value(), &path[1..])
+    }
+
+    fn resolve_nested_config_value_schema<'s>(
+        value_schema: &'s ConfigValueSchema,
+        path: &[&str],
+    ) -> Option<&'s ConfigValueSchema> {
+        if path.is_empty() {
+            return Some(value_schema);
+        }
+
+        match value_schema {
+            ConfigValueSchema::Option { value, .. } => {
+                Self::resolve_nested_config_value_schema(value, path)
+            }
+            ConfigValueSchema::Struct(struct_schema) => {
+                Self::resolve_config_value_schema(struct_schema, path)
+            }
+            ConfigValueSchema::Enum(enum_schema) => {
+                let segment = path[0];
+                let (_, variant_schema) = enum_schema.variants().iter().find(|(key, _)| {
+                    key.eq_ignore_ascii_case(segment) || key.to_kebab_case() == segment
+                })?;
+
+                if path.len() == 1 {
+                    return None;
+                }
+
+                let field_segment = path[1];
+                let (_, field_schema) = variant_schema.fields().iter().find(|(key, _)| {
+                    key.eq_ignore_ascii_case(field_segment) || key.to_kebab_case() == field_segment
+                })?;
+
+                if path.len() == 2 {
+                    Some(field_schema.value())
+                } else {
+                    Self::resolve_nested_config_value_schema(field_schema.value(), &path[2..])
+                }
+            }
+            ConfigValueSchema::Vec(vec_schema) => {
+                path[0].parse::<usize>().ok()?;
+                if path.len() == 1 {
+                    Some(vec_schema.element())
+                } else {
+                    Self::resolve_nested_config_value_schema(vec_schema.element(), &path[1..])
+                }
+            }
+            ConfigValueSchema::Leaf(_) => None,
         }
     }
 
@@ -735,21 +849,71 @@ impl<'a> ParseContext<'a> {
 
     fn parse_config_override(
         &mut self,
-        _arg: &str,
-        flag_name: &str,
+        arg: &str,
         inline_value: Option<&str>,
-        cli_root: &str,
-        config_field_name: &str,
+        target: ConfigOverrideTarget<'_>,
     ) {
         // Extract the path after "config."
-        let path_str = &flag_name[cli_root.len() + 1..];
+        let path_str = &target.flag_name[target.cli_root.len() + 1..];
         let parts: Vec<&str> = path_str.split('.').collect();
 
         // Get the value
         let flag_span = self.current_span(); // Save span before incrementing
+        if target.negated {
+            if !target.is_bool {
+                self.emit_error(format!("unknown flag: {}", arg));
+                self.index += 1;
+                return;
+            }
+
+            let path: Vec<String> = parts.iter().map(|s| (*s).to_string()).collect();
+            let provenance = Provenance::cli(arg, "false");
+            self.config_builders
+                .get_mut(&target.config_field_name)
+                .expect("config_builder must exist when parsing config overrides")
+                .set(&path, LeafValue::Bool(false), None, provenance);
+            self.index += 1;
+            return;
+        }
+
+        if target.is_bool {
+            let mut value = true;
+            let mut provenance_value = String::from("true");
+            let mut value_span = None;
+
+            if let Some(v) = inline_value {
+                value = Self::parse_bool_literal(v).unwrap_or(false);
+                provenance_value = v.to_string();
+                let eq_pos = target.flag_name.len() + 3 + 1; // "--" + flag_name + "="
+                value_span = Some(self.span_within_current(eq_pos, v.len()));
+                self.index += 1;
+            } else {
+                self.index += 1;
+                if self.index < self.args.len()
+                    && let Some(parsed) = Self::parse_bool_literal(self.args[self.index])
+                {
+                    let v = self.args[self.index];
+                    value = parsed;
+                    provenance_value = v.to_string();
+                    value_span = Some(self.current_span());
+                    self.index += 1;
+                }
+            }
+
+            let prov_arg = format!("--{}", target.flag_name);
+            let provenance = Provenance::cli(&prov_arg, provenance_value);
+            let path: Vec<String> = parts.iter().map(|s| (*s).to_string()).collect();
+
+            self.config_builders
+                .get_mut(&target.config_field_name)
+                .expect("config_builder must exist when parsing config overrides")
+                .set(&path, LeafValue::Bool(value), value_span, provenance);
+            return;
+        }
+
         let (value_str, value_span) = if let Some(v) = inline_value {
             // --config.key=value: value starts after the '='
-            let eq_pos = flag_name.len() + 3 + 1; // "--" + flag_name + "="
+            let eq_pos = target.flag_name.len() + 3 + 1; // "--" + flag_name + "="
             let span = self.span_within_current(eq_pos, v.len());
             self.index += 1;
             (v, span)
@@ -761,20 +925,31 @@ impl<'a> ParseContext<'a> {
                 self.index += 1;
                 (v, span)
             } else {
-                self.emit_error_at(format!("flag --{} requires a value", flag_name), flag_span);
+                self.emit_error_at(
+                    format!("flag --{} requires a value", target.flag_name),
+                    flag_span,
+                );
                 return;
             }
         };
 
-        let prov_arg = format!("--{}", flag_name);
+        let prov_arg = format!("--{}", target.flag_name);
         let provenance = Provenance::cli(&prov_arg, value_str);
         let path: Vec<String> = parts.iter().map(|s| (*s).to_string()).collect();
         let leaf_value = LeafValue::String(value_str.to_string());
 
         self.config_builders
-            .get_mut(config_field_name)
+            .get_mut(&target.config_field_name)
             .expect("config_builder must exist when parsing config overrides")
             .set(&path, leaf_value, Some(value_span), provenance);
+    }
+
+    fn parse_bool_literal(value: &str) -> Option<bool> {
+        match value.to_lowercase().as_str() {
+            "true" | "yes" | "1" | "on" | "" => Some(true),
+            "false" | "no" | "0" | "off" => Some(false),
+            _ => None,
+        }
     }
 
     /// Parse the config file path flag (e.g., `--config /path/to/file.json`).
@@ -1612,9 +1787,61 @@ mod tests {
                 "config",
                 cv::object([
                     ("port", cv::string("8080", "--config.port")),
-                    ("debug", cv::string("true", "--config.debug")),
+                    ("debug", cv::bool(true, "--config.debug")),
                 ]),
             )]),
+        );
+    }
+
+    #[test]
+    fn test_config_bool_override_allows_bare_flag() {
+        assert_parses_to::<ArgsWithFlattenedConfigCli>(
+            &["--config.debug"],
+            cv::object([(
+                "config",
+                cv::object([("debug", cv::bool(true, "--config.debug"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_config_bool_override_allows_no_prefix() {
+        assert_parses_to::<ArgsWithFlattenedConfigCli>(
+            &["--no-config.debug"],
+            cv::object([(
+                "config",
+                cv::object([("debug", cv::bool(false, "--no-config.debug"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_config_bool_override_allows_inline_false() {
+        assert_parses_to::<ArgsWithFlattenedConfigCli>(
+            &["--config.debug=false"],
+            cv::object([(
+                "config",
+                cv::object([("debug", cv::bool(false, "--config.debug"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_config_bool_override_allows_separate_false() {
+        assert_parses_to::<ArgsWithFlattenedConfigCli>(
+            &["--config.debug", "false"],
+            cv::object([(
+                "config",
+                cv::object([("debug", cv::bool(false, "--config.debug"))]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_no_prefix_config_override_rejects_non_bool() {
+        assert_diagnostic_contains::<ArgsWithFlattenedConfigCli>(
+            &["--no-config.port"],
+            "unknown flag",
         );
     }
 
