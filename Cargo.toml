@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "4.0.0"
+version = "4.0.1"
 edition = "2024"
 rust-version = "1.90.0"
 authors = ["Amos Wenger <amos@bearcove.eu>"]
@@ -14,7 +14,7 @@ keywords = ["cli", "args", "parser", "facet", "command-line"]
 categories = ["command-line-interface"]
 
 [workspace.dependencies]
-figue-attrs = { path = "crates/figue-attrs", version = "4.0.0" }
+figue-attrs = { path = "crates/figue-attrs", version = "4.0.1" }
 
 # Facet ecosystem
 facet = { version = "0.46", features = ["indexmap", "camino", "net"] }
