@@ -5,8 +5,8 @@
 
 use crate::missing::normalize_program_name;
 use crate::schema::{
-    ArgLevelSchema, ArgSchema, ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, Schema,
-    Subcommand,
+    ArgLevelSchema, ArgSchema, ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, Docs,
+    Schema, Subcommand,
 };
 use facet_core::Facet;
 use heck::ToKebabCase;
@@ -491,7 +491,7 @@ fn render_html_help_document(doc: HtmlHelpDocument<'_>) -> String {
         "    .topbar-inner { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 10px 0; display: grid; grid-template-columns: minmax(160px, auto) minmax(240px, 1fr); gap: 16px; align-items: center; } .topbar-title { font-weight: 750; font-size: 1rem; white-space: nowrap; }\n",
     );
     out.push_str(
-        "    .layout { width: min(1180px, calc(100% - 32px)); margin: 28px auto 72px; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 28px; align-items: start; } main { min-width: 0; } .side-nav { position: sticky; top: 76px; display: flex; flex-direction: column; gap: 3px; padding-left: 12px; border-left: 2px solid var(--line); font-size: .9rem; } .side-nav-title { margin: 0 0 8px; color: var(--muted); font-size: .72rem; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; } .side-nav a { color: var(--muted); text-decoration: none; padding: 4px 0; } .side-nav a.nav-section { color: var(--fg); font-weight: 650; } .side-nav a.nav-command { padding-left: 12px; font-size: .86rem; } .side-nav a:hover { color: var(--accent); }\n",
+        "    .layout { width: min(1180px, calc(100% - 32px)); margin: 28px auto 72px; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 28px; align-items: start; } main { min-width: 0; } .side-nav { position: sticky; top: 76px; max-height: calc(100vh - 92px); overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding-left: 12px; padding-right: 8px; border-left: 2px solid var(--line); font-size: .9rem; scrollbar-width: thin; } .side-nav-title { margin: 0 0 8px; color: var(--muted); font-size: .72rem; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; } .side-nav a { color: var(--muted); text-decoration: none; padding: 4px 0; } .side-nav a.nav-section { color: var(--fg); font-weight: 650; } .side-nav a.nav-command { padding-left: 12px; font-size: .86rem; } .side-nav a:hover { color: var(--accent); }\n",
     );
     out.push_str(
         "    header { max-width: 74ch; border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 30px; } h1 { margin: 0 0 8px; font-size: clamp(2rem, 4vw, 2.45rem); line-height: 1.08; letter-spacing: 0; } h2 { margin: 34px 0 14px; font-size: 1.02rem; line-height: 1.2; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); scroll-margin-top: 82px; } h3 { margin: 20px 0 10px; font-size: 1.02rem; line-height: 1.35; scroll-margin-top: 82px; }\n",
@@ -515,7 +515,7 @@ fn render_html_help_document(doc: HtmlHelpDocument<'_>) -> String {
         "    code { font: .93em/1.45 \"Maple Mono\", ui-monospace, SFMono-Regular, Consolas, \"Liberation Mono\", monospace; background: var(--code); color: var(--fg); border-radius: 4px; padding: 2px 5px; white-space: nowrap; vertical-align: .03em; } code.value-token { background: var(--value-bg); color: var(--value-fg); } code.env-token { background: var(--env-bg); color: var(--env-fg); } .names { width: 32%; } .empty { color: var(--muted); } .badge { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 7px; border-radius: 999px; background: var(--soft); color: var(--accent); font-size: .82rem; font-weight: 600; }\n",
     );
     out.push_str(
-        "    details.schema-node, details.command-card { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); } details.inline-schema { margin-top: 12px; } details.schema-node details.schema-node { margin-left: 18px; background: transparent; } summary { cursor: pointer; font-weight: 650; list-style: none; } summary::-webkit-details-marker { display: none; } details > summary::before { content: \"+\"; display: inline-grid; place-items: center; width: 1.1em; margin-right: 4px; color: var(--accent); font-weight: 750; } details[open] > summary::before { content: \"-\"; } details::details-content { block-size: 0; overflow: clip; transition: block-size .22s ease, content-visibility .22s allow-discrete; } details[open]::details-content { block-size: auto; } @media (prefers-reduced-motion: reduce) { details::details-content { transition: none; } } .node-body, .command-body { margin-top: 8px; padding-left: 2px; } .node-grid { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, auto); gap: 8px 16px; align-items: start; } .config-field { display: grid; grid-template-columns: minmax(180px, 32%) minmax(0, 1fr); gap: 12px 20px; padding: 10px 0; border-bottom: 1px solid var(--line); } .config-field:last-child { border-bottom: 0; } .config-desc p:last-child { margin-bottom: 0; } .override-details { margin-top: 8px; color: var(--muted); font-size: .9rem; } .override-details summary { font-weight: 600; } .override-grid { display: grid; grid-template-columns: auto 3.2em minmax(0, max-content) max-content; gap: 5px 8px; align-items: center; margin-top: 6px; } .copy-button { width: 1.55rem; height: 1.55rem; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--muted); cursor: pointer; } .copy-button svg { width: .9rem; height: .9rem; stroke: currentColor; } .copy-button:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); } .copy-button.is-copied { color: var(--accent); background: var(--soft); } .override-label { color: var(--muted); font-weight: 650; } .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } .layer-examples { display: grid; gap: 4px; }\n",
+        "    details.schema-node, details.command-card { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); } details.inline-schema { margin-top: 12px; } details.schema-node details.schema-node { margin-left: 18px; background: transparent; } summary { cursor: pointer; font-weight: 650; list-style: none; } summary::-webkit-details-marker { display: none; } details > summary::before { content: \"+\"; display: inline-grid; place-items: center; width: 1.1em; margin-right: 4px; color: var(--accent); font-weight: 750; } details[open] > summary::before { content: \"-\"; } details::details-content { block-size: 0; overflow: clip; transition: block-size .22s ease, content-visibility .22s allow-discrete; } details[open]::details-content { block-size: auto; } @media (prefers-reduced-motion: reduce) { details::details-content { transition: none; } } .node-body, .command-body { margin-top: 8px; padding-left: 2px; } .node-grid { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, auto); gap: 8px 16px; align-items: start; } .config-field { display: grid; grid-template-columns: minmax(0, 34%) minmax(0, 1fr); gap: 12px 20px; padding: 10px 0; border-bottom: 1px solid var(--line); } .config-field:last-child { border-bottom: 0; } .config-name, .config-desc { min-width: 0; } .config-name code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; } .config-desc p:last-child { margin-bottom: 0; } .override-details { margin-top: 8px; color: var(--muted); font-size: .9rem; } .override-details summary { font-weight: 600; } .override-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 8px; align-items: center; margin-top: 6px; } .override-grid code { min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; } .copy-button { width: 1.55rem; height: 1.55rem; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--muted); cursor: pointer; } .copy-button svg { width: .9rem; height: .9rem; stroke: currentColor; } .copy-button:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); } .copy-button.is-copied { color: var(--accent); background: var(--soft); } .override-label { color: var(--muted); font-weight: 650; display: inline-flex; align-items: center; gap: 6px; } .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } .layer-examples { display: grid; gap: 4px; }\n",
     );
     out.push_str(
         "    .config-schema-panel { margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }\n",
@@ -868,8 +868,8 @@ fn render_html_arg_row(out: &mut String, arg: &ArgSchema) {
     }
     render_arg_name_meta(out, arg);
     out.push_str("</td><td>");
-    if let Some(summary) = arg.docs().summary() {
-        push_markdown(out, summary.trim());
+    if arg.docs().summary().is_some() || arg.docs().details().is_some() {
+        render_html_docs(out, arg.docs());
     } else {
         out.push_str("<span class=\"empty\">No description.</span>");
     }
@@ -1118,7 +1118,7 @@ fn render_html_config_field_node(
             render_default_summary(out, field.default());
             out.push_str("</summary>\n<div class=\"node-body\">\n");
             render_config_field_docs(out, field);
-            render_config_override_details(out, path, field.value(), env_prefix);
+            render_config_override_details(out, path, env_prefix);
             let item_path = join_path(path, "<INDEX>");
             render_html_config_value_node(
                 out,
@@ -1139,7 +1139,7 @@ fn render_html_config_field_node(
             render_default_summary(out, field.default());
             out.push_str("</summary>\n<div class=\"node-body\">\n");
             render_config_field_docs(out, field);
-            render_config_override_details(out, path, field.value(), env_prefix);
+            render_config_override_details(out, path, env_prefix);
             for (variant_name, variant) in enum_schema.variants() {
                 out.push_str("<details class=\"schema-node search-item\">\n<summary><code>");
                 push_escaped(out, variant_name);
@@ -1211,7 +1211,7 @@ fn render_html_config_value_node(
             out.push_str("</code> <span class=\"meta\">enum ");
             push_escaped(out, value.type_identifier());
             out.push_str("</span></summary>\n<div class=\"node-body\">\n");
-            render_config_override_details(out, path, value, env_prefix);
+            render_config_override_details(out, path, env_prefix);
             for variant_name in enum_schema.variants().keys() {
                 out.push_str("<p><code>");
                 push_escaped(out, variant_name);
@@ -1225,7 +1225,7 @@ fn render_html_config_value_node(
             out.push_str("</code> <span class=\"meta\">");
             push_escaped(out, value.type_identifier());
             out.push_str("</span>");
-            render_config_override_details(out, path, value, env_prefix);
+            render_config_override_details(out, path, env_prefix);
             out.push_str("</div></div>\n");
         }
         ConfigValueSchema::Option { .. } => unreachable!("inner_if_option removes Option wrappers"),
@@ -1246,45 +1246,35 @@ fn render_html_config_leaf_node(
     out.push_str("</code> <span class=\"meta\">");
     push_escaped(out, field.value().type_identifier());
     out.push_str("</span>");
-    render_config_default_meta(out, field.default());
+    render_config_default_meta(out, field.value(), field.default());
     out.push_str("</div><div class=\"config-desc\">");
     render_config_field_docs(out, field);
-    render_config_override_details(out, path, field.value(), env_prefix);
+    render_config_override_details(out, path, env_prefix);
     out.push_str("</div></div>\n");
 }
 
 fn render_config_field_docs(out: &mut String, field: &ConfigFieldSchema) {
-    if let Some(summary) = field.docs().summary() {
-        out.push_str("<p>");
-        push_markdown(out, summary.trim());
-        out.push_str("</p>\n");
+    if field.docs().summary().is_some() || field.docs().details().is_some() {
+        render_html_docs(out, field.docs());
     }
 }
 
-fn render_config_override_details(
-    out: &mut String,
-    path: &str,
-    value: &ConfigValueSchema,
-    env_prefix: Option<&str>,
-) {
+fn render_config_override_details(out: &mut String, path: &str, env_prefix: Option<&str>) {
     out.push_str("<details class=\"override-details\"><summary>Overrides</summary>\n");
     out.push_str("<div class=\"override-grid\">\n");
     let cli_flag = format!("--{path}");
+    out.push_str("<span class=\"override-label\">");
     render_copy_button(out, &cli_flag);
-    out.push_str("<span class=\"override-label\">CLI</span><code>");
+    out.push_str("CLI</span><code>");
     push_escaped(out, &cli_flag);
-    out.push_str("</code><code class=\"value-token\">");
-    push_escaped(
-        out,
-        &format!("<{}>", value.type_identifier().to_uppercase()),
-    );
     out.push_str("</code>\n");
     if let Some(env_prefix) = env_prefix {
         let env_name = env_override_name(env_prefix, path);
+        out.push_str("<span class=\"override-label\">");
         render_copy_button(out, &env_name);
-        out.push_str("<span class=\"override-label\">Env</span><code class=\"env-token\">");
+        out.push_str("Env</span><code class=\"env-token\">");
         push_escaped(out, &env_name);
-        out.push_str("</code><code class=\"value-token\">=...</code>\n");
+        out.push_str("</code>\n");
     }
     out.push_str("</div>\n</details>\n");
 }
@@ -1301,14 +1291,23 @@ fn render_copy_button(out: &mut String, value: &str) {
 
 fn render_config_default_meta(
     out: &mut String,
+    value: &ConfigValueSchema,
     default: Option<&crate::config_value::ConfigValue>,
 ) {
+    let false_bool_default =
+        value.is_bool() && default.map(config_value_summary).as_deref() == Some("false");
+    if false_bool_default || (default.is_none() && value.is_bool()) {
+        return;
+    }
+
     out.push_str("<span class=\"name-meta\">");
     if let Some(default) = default {
         out.push_str("Default ");
         out.push_str("<code class=\"value-token\">");
         push_escaped(out, &config_value_summary(default));
         out.push_str("</code>");
+    } else if value.is_option() {
+        out.push_str("Optional");
     } else {
         out.push_str("Required");
     }
@@ -1609,6 +1608,34 @@ function escapeRegExp(value) {
 </script>
 "#,
     );
+}
+
+fn render_html_docs(out: &mut String, docs: &Docs) {
+    let mut text = String::new();
+    if let Some(summary) = docs.summary() {
+        text.push_str(summary.trim());
+    }
+    if let Some(details) = docs.details() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(details.trim());
+    }
+
+    for paragraph in text.split("\n\n") {
+        let paragraph = paragraph
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if paragraph.is_empty() {
+            continue;
+        }
+        out.push_str("<p>");
+        push_markdown(out, &paragraph);
+        out.push_str("</p>\n");
+    }
 }
 
 fn push_markdown(out: &mut String, text: &str) {
@@ -2301,6 +2328,7 @@ mod tests {
         assert!(html.contains("Input &lt;path&gt; to process"));
         assert!(html.contains("--[no-]verbose"));
         assert!(html.contains("<nav class=\"side-nav\""));
+        assert!(html.contains("max-height: calc(100vh - 92px); overflow-y: auto;"));
         assert!(html.contains("On This Page"));
         assert!(html.contains("Top-Level Options"));
         assert!(html.contains("data-collapsible-intro"));
@@ -2346,8 +2374,12 @@ mod tests {
         assert!(html.contains("data-copy=\"--settings.server.port\""));
         assert!(html.contains("<code class=\"env-token\">APP__SERVER__PORT</code>"));
         assert!(html.contains("data-copy=\"APP__SERVER__PORT\""));
-        assert!(html.contains("<code class=\"value-token\">&lt;U16&gt;</code>"));
-        assert!(html.contains("<code class=\"value-token\">=...</code>"));
+        assert!(!html.contains(
+            "<code>--settings.server.port</code><code class=\"value-token\">&lt;U16&gt;</code>"
+        ));
+        assert!(!html.contains(
+            "<code class=\"env-token\">APP__SERVER__PORT</code><code class=\"value-token\">=...</code>"
+        ));
         assert!(
             html.contains(
                 "<code>--settings</code> <code class=\"value-token\">settings.json</code>"
@@ -2362,6 +2394,54 @@ mod tests {
         assert!(html.contains("Default <code class=\"value-token\">8080</code>"));
         assert!(!html.contains("config-schema-heading"));
         assert!(!html.contains("--settings.server.port &lt;U16&gt;</code></td><td>"));
+        assert!(html.contains(".config-name code { white-space: normal;"));
+        assert!(html.contains(
+            ".override-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr);"
+        ));
+    }
+
+    #[test]
+    fn test_html_help_config_meta_matches_implicit_defaults() {
+        #[derive(Facet)]
+        struct Args {
+            #[facet(args::config)]
+            settings: Settings,
+        }
+
+        #[derive(Facet)]
+        #[allow(dead_code)]
+        struct Settings {
+            /// Enables the feature.
+            #[facet(default)]
+            enabled: bool,
+
+            /// Optional queue size.
+            queue_size: Option<usize>,
+
+            /// Implicitly false when omitted.
+            implicit_flag: bool,
+        }
+
+        let html = generate_html_help::<Args>(&HelpConfig::default());
+
+        assert!(!html.contains("Default <code class=\"value-token\">false</code>"));
+        assert!(!html.contains("<code>implicit_flag</code> <span class=\"meta\">bool</span><span class=\"name-meta\">Required</span>"));
+        assert!(html.contains("<code>queue_size</code> <span class=\"meta\">usize</span><span class=\"name-meta\">Optional</span>"));
+    }
+
+    #[test]
+    fn test_html_help_arg_rows_include_wrapped_doc_details() {
+        #[derive(Facet)]
+        struct Args {
+            /// Output path for the alignment JSONL (one
+            /// object per line).
+            #[facet(args::named)]
+            out: Option<String>,
+        }
+
+        let html = generate_html_help::<Args>(&HelpConfig::default());
+
+        assert!(html.contains("<p>Output path for the alignment JSONL (one object per line).</p>"));
     }
 
     #[test]

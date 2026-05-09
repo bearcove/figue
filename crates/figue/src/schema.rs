@@ -824,6 +824,22 @@ impl ConfigValueSchema {
             ConfigValueSchema::Leaf(leaf) => leaf.shape.type_identifier,
         }
     }
+
+    /// Check if this is an Option type.
+    pub fn is_option(&self) -> bool {
+        matches!(self, ConfigValueSchema::Option { .. })
+    }
+
+    /// Check if this is a boolean type, unwrapping Option if present.
+    pub fn is_bool(&self) -> bool {
+        matches!(
+            self.inner_if_option(),
+            ConfigValueSchema::Leaf(LeafSchema {
+                kind: LeafKind::Scalar(ScalarType::Bool),
+                ..
+            })
+        )
+    }
 }
 
 impl ValueSchema {
