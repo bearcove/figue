@@ -819,7 +819,6 @@ mod tests {
             .strict()
             .build();
 
-        // explicit_path is set by the driver when CLI provides --config <path>
         assert_eq!(config.explicit_path, None);
         assert_eq!(config.default_paths.len(), 2);
         assert!(config.strict);

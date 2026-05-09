@@ -128,8 +128,11 @@ impl FormatRegistry {
 
 /// Configuration for config file parsing.
 pub struct FileConfig {
-    /// Explicit path provided via CLI (e.g., --config path.json).
+    /// Explicit global config path provided through the builder API.
     pub explicit_path: Option<Utf8PathBuf>,
+
+    /// Explicit paths provided via CLI, keyed by config root field name.
+    pub explicit_paths_by_root: IndexMap<String, Utf8PathBuf>,
 
     /// Default paths to check if no explicit path is provided.
     pub default_paths: Vec<Utf8PathBuf>,
@@ -150,6 +153,7 @@ impl Default for FileConfig {
     fn default() -> Self {
         Self {
             explicit_path: None,
+            explicit_paths_by_root: IndexMap::default(),
             default_paths: Vec::new(),
             registry: FormatRegistry::with_defaults(),
             strict: false,
@@ -233,6 +237,8 @@ struct FileParseContext<'a> {
     config: &'a FileConfig,
     /// Parsed config value (if successful)
     value: Option<ConfigValue>,
+    /// Parsed config values that were explicitly targeted at config roots.
+    targeted_values: IndexMap<String, ConfigValue>,
     /// Diagnostics collected before ValueBuilder takes over
     early_diagnostics: Vec<Diagnostic>,
     /// File resolution tracking
@@ -245,12 +251,18 @@ impl<'a> FileParseContext<'a> {
             schema,
             config,
             value: None,
+            targeted_values: IndexMap::default(),
             early_diagnostics: Vec::new(),
             resolution: FileResolution::new(),
         }
     }
 
     fn parse(&mut self) {
+        if self.config.inline_content.is_none() && !self.config.explicit_paths_by_root.is_empty() {
+            self.parse_targeted_paths();
+            return;
+        }
+
         // Check for inline content first (used for testing)
         let (path, contents) = if let Some((content, filename)) = &self.config.inline_content {
             let path = Utf8PathBuf::from(filename);
@@ -285,6 +297,39 @@ impl<'a> FileParseContext<'a> {
         };
 
         self.value = Some(parsed);
+    }
+
+    fn parse_targeted_paths(&mut self) {
+        self.resolution
+            .mark_defaults_not_tried(&self.config.default_paths);
+
+        for (field_name, path) in &self.config.explicit_paths_by_root {
+            let exists = path.exists();
+            self.resolution.add_explicit(path.clone(), exists);
+
+            if !exists {
+                self.emit_error(format!("config file not found: {}", path));
+                continue;
+            }
+
+            let contents = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    self.emit_error(format!("failed to read {}: {}", path, e));
+                    continue;
+                }
+            };
+
+            let parsed = match self.config.registry.parse_file(path, &contents) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.emit_error(format!("failed to parse {}: {}", path, e));
+                    continue;
+                }
+            };
+
+            self.targeted_values.insert(field_name.clone(), parsed);
+        }
     }
 
     /// Resolve which file path to use.
@@ -337,7 +382,13 @@ impl<'a> FileParseContext<'a> {
         // If we have config schemas and a parsed value, use ValueBuilder
         // to validate and collect unused keys
         let output = if !self.schema.configs().is_empty() {
-            if let Some(ref parsed) = self.value {
+            if !self.targeted_values.is_empty() {
+                Self::targeted_config_output(
+                    self.schema,
+                    &self.targeted_values,
+                    self.early_diagnostics,
+                )
+            } else if let Some(ref parsed) = self.value {
                 if self.schema.configs().len() == 1 {
                     let config_schema = &self.schema.configs()[0];
                     // Create a ValueBuilder and import the parsed tree
@@ -367,7 +418,7 @@ impl<'a> FileParseContext<'a> {
                     unused_keys: Vec::new(),
                     diagnostics: self.early_diagnostics,
                     source_text: None,
-                    config_file_path: None,
+                    config_file_paths: IndexMap::default(),
                 }
             }
         } else {
@@ -377,7 +428,7 @@ impl<'a> FileParseContext<'a> {
                 unused_keys: Vec::new(),
                 diagnostics: self.early_diagnostics,
                 source_text: None,
-                config_file_path: None,
+                config_file_paths: IndexMap::default(),
             }
         };
 
@@ -410,7 +461,7 @@ impl<'a> FileParseContext<'a> {
                 unused_keys,
                 diagnostics,
                 source_text: None,
-                config_file_path: None,
+                config_file_paths: IndexMap::default(),
             };
         };
 
@@ -459,7 +510,56 @@ impl<'a> FileParseContext<'a> {
             unused_keys,
             diagnostics,
             source_text: None,
-            config_file_path: None,
+            config_file_paths: IndexMap::default(),
+        }
+    }
+
+    fn targeted_config_output(
+        schema: &Schema,
+        targeted_values: &IndexMap<String, ConfigValue>,
+        early_diagnostics: Vec<Diagnostic>,
+    ) -> LayerOutput {
+        let mut root = IndexMap::default();
+        let mut unused_keys = Vec::new();
+        let mut diagnostics = early_diagnostics;
+
+        for (field_name, config_value) in targeted_values {
+            let Some(config_schema) = schema
+                .configs()
+                .iter()
+                .find(|config_schema| config_schema.field_name() == Some(field_name.as_str()))
+            else {
+                unused_keys.push(crate::driver::UnusedKey {
+                    key: vec![field_name.clone()],
+                    provenance: get_provenance(config_value)
+                        .cloned()
+                        .unwrap_or(Provenance::Default),
+                });
+                continue;
+            };
+
+            let mut builder = ValueBuilder::new(config_schema);
+            builder.import_tree(config_value);
+            let mut builder_output =
+                builder.into_output_with_value(Some(config_value.clone()), None);
+
+            if let Some(value) = builder_output.value {
+                root.insert(field_name.clone(), value);
+            }
+
+            for unused_key in &mut builder_output.unused_keys {
+                unused_key.key.insert(0, field_name.clone());
+            }
+            unused_keys.extend(builder_output.unused_keys);
+            diagnostics.extend(builder_output.diagnostics);
+        }
+
+        LayerOutput {
+            value: Some(ConfigValue::Object(Sourced::new(root))),
+            unused_keys,
+            diagnostics,
+            source_text: None,
+            config_file_paths: IndexMap::default(),
         }
     }
 }

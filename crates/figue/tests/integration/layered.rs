@@ -262,6 +262,46 @@ fn test_layered_multiple_config_roots() {
     assert!(matches!(args.command, MultiConfigCommand::Run));
 }
 
+#[test]
+fn test_layered_multiple_config_roots_cli_file_targets_matching_root() {
+    use std::io::Write;
+
+    let mut cfg_file = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    write!(
+        cfg_file,
+        r#"{{
+            "host": "file-host",
+            "port": 3000
+        }}"#
+    )
+    .unwrap();
+
+    let cfg_path = cfg_file.path().to_str().unwrap();
+    let config = builder::<MultiConfigArgs>()
+        .unwrap()
+        .cli(|cli| {
+            cli.args([
+                "--cfg",
+                cfg_path,
+                "--cfg.host",
+                "cli-host",
+                "--eval.dataset",
+                "cli-dataset",
+                "run",
+            ])
+        })
+        .build();
+
+    let args = Driver::new(config).run().unwrap();
+
+    assert_eq!(args.cfg.host, "cli-host");
+    assert_eq!(args.cfg.port, 3000);
+    assert_eq!(args.eval.dataset, "cli-dataset");
+    assert_eq!(args.eval.samples, 10);
+    assert!(!args.eval.enabled);
+    assert!(matches!(args.command, MultiConfigCommand::Run));
+}
+
 /// Simpler structure for testing dump output with all sources visible.
 #[derive(Facet, Debug)]
 struct SimpleArgs {

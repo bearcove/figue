@@ -206,9 +206,8 @@ struct ParseContext<'a> {
     parent_stack: Vec<ParentLevel<'a>>,
     /// ValueBuilders for config overrides (--config.foo.bar style), keyed by config root field.
     config_builders: IndexMap<String, ValueBuilder<'a>, RandomState>,
-    /// Config file path captured from `--<config-field-name> <path>`.
-    /// E.g., if the config field is named "config", this captures `--config /path/to/file.json`.
-    config_file_path: Option<camino::Utf8PathBuf>,
+    /// Config file paths captured by config root.
+    config_file_paths: IndexMap<String, camino::Utf8PathBuf, RandomState>,
 }
 
 impl<'a> ParseContext<'a> {
@@ -247,7 +246,7 @@ impl<'a> ParseContext<'a> {
             arg_offsets,
             parent_stack: Vec::new(),
             config_builders,
-            config_file_path: None,
+            config_file_paths: IndexMap::default(),
         }
     }
 
@@ -358,7 +357,7 @@ impl<'a> ParseContext<'a> {
             if let Some(config_field_name) = config_schema.field_name()
                 && flag_name == config_field_name.to_kebab_case()
             {
-                self.parse_config_file_path(arg, inline_value);
+                self.parse_config_file_path(arg, inline_value, config_field_name);
                 return;
             }
         }
@@ -784,7 +783,12 @@ impl<'a> ParseContext<'a> {
     /// - Field `config: ServerConfig` -> `--config <path>`
     /// - Field `settings: ServerConfig` -> `--settings <path>`
     /// - Field `#[facet(rename = "cfg")] config: ServerConfig` -> `--cfg <path>`
-    fn parse_config_file_path(&mut self, arg: &str, inline_value: Option<&str>) {
+    fn parse_config_file_path(
+        &mut self,
+        arg: &str,
+        inline_value: Option<&str>,
+        config_field_name: &str,
+    ) {
         let flag_span = self.current_span();
 
         let path_str = if let Some(v) = inline_value {
@@ -804,7 +808,9 @@ impl<'a> ParseContext<'a> {
             }
         };
 
-        self.config_file_path = Some(camino::Utf8PathBuf::from(path_str));
+        let path = camino::Utf8PathBuf::from(path_str);
+        self.config_file_paths
+            .insert(config_field_name.to_string(), path);
     }
 
     fn try_parse_subcommand(&mut self, level: &'a ArgLevelSchema) -> bool {
@@ -1151,7 +1157,7 @@ impl<'a> ParseContext<'a> {
             unused_keys,
             diagnostics,
             source_text: None,
-            config_file_path: self.config_file_path,
+            config_file_paths: self.config_file_paths,
         }
     }
 }
