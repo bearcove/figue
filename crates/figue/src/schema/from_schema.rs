@@ -4,8 +4,9 @@ use crate::{
     Attr,
     schema::{
         ArgKind, ArgLevelSchema, ArgSchema, ConfigEnumSchema, ConfigEnumVariantSchema,
-        ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema, ConfigVecSchema, Docs, LeafKind,
-        LeafSchema, ScalarType, Schema, SpecialFields, Subcommand, ValueSchema,
+        ConfigFieldGroupSchema, ConfigFieldSchema, ConfigStructSchema, ConfigValueSchema,
+        ConfigVecSchema, Docs, LeafKind, LeafSchema, ScalarType, Schema, SpecialFields, Subcommand,
+        ValueSchema,
         error::{SchemaError, SchemaErrorContext},
     },
 };
@@ -466,6 +467,7 @@ fn config_struct_schema_from_shape_inner(
     let apply_env_subst_to_children = parent_env_subst_all || this_env_subst_all;
 
     let mut fields_map: IndexMap<String, ConfigFieldSchema, RandomState> = IndexMap::default();
+    let mut field_groups = Vec::new();
 
     for field in struct_type.fields {
         let field_ctx = ctx.with_field(field.name);
@@ -499,6 +501,13 @@ fn config_struct_schema_from_shape_inner(
                 new_prefix,
                 apply_env_subst_to_children,
             )?;
+
+            field_groups.push(ConfigFieldGroupSchema {
+                name: field.effective_name().to_string(),
+                docs: docs_from_lines(field.doc),
+                fields: inner.fields.clone(),
+                field_groups: inner.field_groups.clone(),
+            });
 
             // Merge the inner fields into our fields (checking for conflicts)
             for (name, field_schema) in inner.fields {
@@ -554,6 +563,7 @@ fn config_struct_schema_from_shape_inner(
         env_prefix,
         shape,
         fields: fields_map,
+        field_groups,
     })
 }
 
