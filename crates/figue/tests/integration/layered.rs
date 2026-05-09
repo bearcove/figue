@@ -61,6 +61,22 @@ struct TlsConfig {
     key_path: String,
 }
 
+#[derive(Facet, Debug)]
+struct ArgsWithFlattenedConfigRoot {
+    /// Run configuration; config sources keep this root namespace.
+    #[facet(args::config, args::env_prefix = "BEE_RUN")]
+    #[facet(flatten)]
+    run: FlattenedRunConfig,
+}
+
+#[derive(Facet, Debug)]
+struct FlattenedRunConfig {
+    model: String,
+
+    #[facet(default)]
+    tui: bool,
+}
+
 #[test]
 fn test_layered_all_sources() {
     // Config file content (lowest priority after defaults)
@@ -115,6 +131,32 @@ fn test_layered_all_sources() {
     );
     // Default: tls is None
     assert!(args.config.tls.is_none(), "tls should be None (default)");
+}
+
+#[test]
+fn test_flattened_config_root_merges_namespaced_sources_then_deserializes_flat() {
+    let config_json = r#"{
+        "run": {
+            "model": "file-model"
+        }
+    }"#;
+
+    let env = MockEnv::from_pairs([("BEE_RUN__MODEL", "env-model")]);
+
+    let config = builder::<ArgsWithFlattenedConfigRoot>()
+        .unwrap()
+        .cli(|cli| cli.args(["--tui", "--run.model", "cli-model"]))
+        .env(|e| e.source(env))
+        .file(|f| f.content(config_json, "config.json"))
+        .build();
+
+    let args = Driver::new(config).run().unwrap();
+
+    assert!(args.run.tui, "flattened CLI flag should populate run.tui");
+    assert_eq!(
+        args.run.model, "cli-model",
+        "dotted CLI overrides should keep the config-root namespace and override env/file"
+    );
 }
 
 #[test]

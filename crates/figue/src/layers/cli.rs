@@ -179,6 +179,8 @@ struct ParentFlagLookup {
     parent_idx: usize,
     /// Effective name of the argument (owned to avoid borrow)
     effective_name: String,
+    /// ConfigValue path to insert into at that parent level.
+    insertion_path: Vec<String>,
     /// Whether this is a bool flag
     is_bool: bool,
     /// Whether this is a counted flag
@@ -391,7 +393,7 @@ impl<'a> ParseContext<'a> {
                 self.index += 1;
                 return;
             }
-            self.parse_flag_value(arg, effective_name, arg_schema, inline_value);
+            self.parse_flag_value(arg, arg_schema, inline_value);
         } else if let Some(lookup) = self.find_long_flag_in_parents(flag_name) {
             // Adoption agency: flag found in parent level, bubble up
             let target = InsertTarget::Parent(lookup.parent_idx);
@@ -403,20 +405,20 @@ impl<'a> ParseContext<'a> {
             self.parse_flag_value_simple(
                 arg,
                 target,
-                &lookup.effective_name,
+                &lookup.insertion_path,
                 lookup.is_bool,
                 None, // enum_variants not available for parent lookup
                 inline_value,
             );
         } else if let Some(negated_name) = flag_name.strip_prefix("no-") {
             // --no-<flag> syntax: negate a boolean flag
-            if let Some((effective_name, arg_schema)) = level.args().get(negated_name)
+            if let Some((_effective_name, arg_schema)) = level.args().get(negated_name)
                 && arg_schema.value().inner_if_option().is_bool()
             {
-                let effective_name = effective_name.to_string();
                 let prov = Provenance::cli(arg, "false".to_string());
-                self.insert_value(
-                    &effective_name,
+                self.insert_value_path_to(
+                    InsertTarget::Current,
+                    arg_schema.insertion_path(),
                     ConfigValue::Bool(Sourced {
                         value: false,
                         span: None,
@@ -429,11 +431,10 @@ impl<'a> ParseContext<'a> {
             {
                 // Adoption agency: boolean flag found in parent, negate it
                 let target = InsertTarget::Parent(lookup.parent_idx);
-                let effective_name = lookup.effective_name.clone();
                 let prov = Provenance::cli(arg, "false".to_string());
-                self.insert_value_to(
+                self.insert_value_path_to(
                     target,
-                    &effective_name,
+                    &lookup.insertion_path,
                     ConfigValue::Bool(Sourced {
                         value: false,
                         span: None,
@@ -603,25 +604,34 @@ impl<'a> ParseContext<'a> {
             });
 
             // Determine target and flag info
-            let (target, name, is_bool, is_counted) = if let Some((name, arg_schema)) = found {
-                let is_counted = matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
-                let is_bool = arg_schema
-                    .value()
-                    .inner_if_option()
-                    .is_bool_or_vec_of_bool();
-                (InsertTarget::Current, name.to_string(), is_bool, is_counted)
-            } else if let Some(lookup) = self.find_short_flag_in_parents(*ch) {
-                // Adoption agency: flag found in parent level
-                (
-                    InsertTarget::Parent(lookup.parent_idx),
-                    lookup.effective_name,
-                    lookup.is_bool,
-                    lookup.is_counted,
-                )
-            } else {
-                self.emit_error(format!("unknown flag: -{}", ch));
-                continue;
-            };
+            let (target, name, insertion_path, is_bool, is_counted) =
+                if let Some((name, arg_schema)) = found {
+                    let is_counted =
+                        matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
+                    let is_bool = arg_schema
+                        .value()
+                        .inner_if_option()
+                        .is_bool_or_vec_of_bool();
+                    (
+                        InsertTarget::Current,
+                        name.to_string(),
+                        arg_schema.insertion_path().to_vec(),
+                        is_bool,
+                        is_counted,
+                    )
+                } else if let Some(lookup) = self.find_short_flag_in_parents(*ch) {
+                    // Adoption agency: flag found in parent level
+                    (
+                        InsertTarget::Parent(lookup.parent_idx),
+                        lookup.effective_name,
+                        lookup.insertion_path,
+                        lookup.is_bool,
+                        lookup.is_counted,
+                    )
+                } else {
+                    self.emit_error(format!("unknown flag: -{}", ch));
+                    continue;
+                };
 
             if is_counted {
                 self.increment_counted_to(target, &name);
@@ -633,9 +643,9 @@ impl<'a> ParseContext<'a> {
             if is_bool {
                 // Bool flag: set to true
                 let prov = Provenance::cli(format!("-{}", ch), "true");
-                self.insert_value_to(
+                self.insert_value_path_to(
                     target,
-                    &name,
+                    &insertion_path,
                     ConfigValue::Bool(Sourced {
                         value: true,
                         span: None,
@@ -651,7 +661,7 @@ impl<'a> ParseContext<'a> {
                     let value_str = self.args[self.index];
                     let prov_arg = format!("-{}", ch);
                     let value = self.parse_value_string(value_str, &prov_arg, value_span);
-                    self.insert_value_to(target, &name, value);
+                    self.insert_value_path_to(target, &insertion_path, value);
                 } else {
                     // For short flags, we don't have easy access to enum variants
                     // Could be improved in the future
@@ -664,7 +674,7 @@ impl<'a> ParseContext<'a> {
                 let value_span = self.span_within_current(i + 1, rest.len());
                 let prov_arg = format!("-{}", ch);
                 let value = self.parse_value_string(&rest, &prov_arg, value_span);
-                self.insert_value_to(target, &name, value);
+                self.insert_value_path_to(target, &insertion_path, value);
                 break; // Consumed rest of chars
             }
         }
@@ -687,22 +697,30 @@ impl<'a> ParseContext<'a> {
         });
 
         // Determine target and flag info
-        let (target, name, is_bool, is_counted) = if let Some((name, arg_schema)) = found {
-            let is_counted = matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
-            let is_bool = arg_schema.value().inner_if_option().is_bool();
-            (InsertTarget::Current, name.to_string(), is_bool, is_counted)
-        } else if let Some(lookup) = self.find_short_flag_in_parents(ch) {
-            // Adoption agency: flag found in parent level
-            (
-                InsertTarget::Parent(lookup.parent_idx),
-                lookup.effective_name,
-                lookup.is_bool,
-                lookup.is_counted,
-            )
-        } else {
-            self.emit_error(format!("unknown flag: -{}", ch));
-            return;
-        };
+        let (target, name, insertion_path, is_bool, is_counted) =
+            if let Some((name, arg_schema)) = found {
+                let is_counted = matches!(arg_schema.kind(), ArgKind::Named { counted: true, .. });
+                let is_bool = arg_schema.value().inner_if_option().is_bool();
+                (
+                    InsertTarget::Current,
+                    name.to_string(),
+                    arg_schema.insertion_path().to_vec(),
+                    is_bool,
+                    is_counted,
+                )
+            } else if let Some(lookup) = self.find_short_flag_in_parents(ch) {
+                // Adoption agency: flag found in parent level
+                (
+                    InsertTarget::Parent(lookup.parent_idx),
+                    lookup.effective_name,
+                    lookup.insertion_path,
+                    lookup.is_bool,
+                    lookup.is_counted,
+                )
+            } else {
+                self.emit_error(format!("unknown flag: -{}", ch));
+                return;
+            };
 
         if is_counted {
             self.increment_counted_to(target, &name);
@@ -718,9 +736,9 @@ impl<'a> ParseContext<'a> {
                 "true" | "yes" | "1" | "on" | ""
             );
             let prov = Provenance::cli(&prov_arg, value.to_string());
-            self.insert_value_to(
+            self.insert_value_path_to(
                 target,
-                &name,
+                &insertion_path,
                 ConfigValue::Bool(Sourced {
                     value,
                     span: None,
@@ -731,23 +749,17 @@ impl<'a> ParseContext<'a> {
             // Value starts after the '=' which is at position 2 (after -k)
             let value_span = self.span_within_current(3, value_str.len());
             let value = self.parse_value_string(value_str, &prov_arg, value_span);
-            self.insert_value_to(target, &name, value);
+            self.insert_value_path_to(target, &insertion_path, value);
         }
     }
 
-    fn parse_flag_value(
-        &mut self,
-        arg: &str,
-        name: &str,
-        schema: &ArgSchema,
-        inline_value: Option<&str>,
-    ) {
+    fn parse_flag_value(&mut self, arg: &str, schema: &ArgSchema, inline_value: Option<&str>) {
         let is_bool = schema.value().inner_if_option().is_bool();
         let enum_variants = schema.value().inner_if_option().enum_variants();
         self.parse_flag_value_simple(
             arg,
             InsertTarget::Current,
-            name,
+            schema.insertion_path(),
             is_bool,
             enum_variants,
             inline_value,
@@ -759,7 +771,7 @@ impl<'a> ParseContext<'a> {
         &mut self,
         arg: &str,
         target: InsertTarget,
-        name: &str,
+        insertion_path: &[String],
         is_bool: bool,
         enum_variants: Option<&[String]>,
         inline_value: Option<&str>,
@@ -773,9 +785,9 @@ impl<'a> ParseContext<'a> {
                 true
             };
             let prov = Provenance::cli(arg, value.to_string());
-            self.insert_value_to(
+            self.insert_value_path_to(
                 target,
-                name,
+                insertion_path,
                 ConfigValue::Bool(Sourced {
                     value,
                     span: None,
@@ -786,6 +798,7 @@ impl<'a> ParseContext<'a> {
         } else {
             // Non-bool: need a value
             let flag_span = self.current_span();
+            let name = insertion_path.last().map(String::as_str).unwrap_or("");
 
             // Check up-front whether this is the special completions field,
             // which is allowed to omit its value (triggering auto-detection).
@@ -812,9 +825,9 @@ impl<'a> ParseContext<'a> {
                 if is_completions_field && (at_end || next_looks_like_flag) {
                     // No shell specified — store sentinel for auto-detection.
                     let prov = Provenance::cli(arg, "auto");
-                    self.insert_value_to(
+                    self.insert_value_path_to(
                         target,
-                        name,
+                        insertion_path,
                         ConfigValue::String(Sourced {
                             value: "auto".to_string(),
                             span: None,
@@ -843,7 +856,7 @@ impl<'a> ParseContext<'a> {
 
             let prov_arg = arg.split('=').next().unwrap_or(arg);
             let value = self.parse_value_string(value_str, prov_arg, value_span);
-            self.insert_value_to(target, name, value);
+            self.insert_value_path_to(target, insertion_path, value);
         }
     }
 
@@ -1106,6 +1119,7 @@ impl<'a> ParseContext<'a> {
                 return Some(ParentFlagLookup {
                     parent_idx: idx,
                     effective_name: effective_name.to_string(),
+                    insertion_path: arg_schema.insertion_path().to_vec(),
                     is_bool,
                     is_counted,
                 });
@@ -1128,6 +1142,7 @@ impl<'a> ParseContext<'a> {
                     return Some(ParentFlagLookup {
                         parent_idx: idx,
                         effective_name: name.to_string(),
+                        insertion_path: schema.insertion_path().to_vec(),
                         is_bool,
                         is_counted,
                     });
@@ -1158,19 +1173,19 @@ impl<'a> ParseContext<'a> {
         let arg = self.args[self.index];
 
         // Find the next unset positional argument
-        for (name, schema) in level.args() {
+        for (_name, schema) in level.args() {
             if !matches!(schema.kind(), ArgKind::Positional) {
                 continue;
             }
 
             // Check if already set (unless it's multiple/list)
-            if self.has_value(name) && !schema.multiple() {
+            if self.has_value_path(schema.insertion_path()) && !schema.multiple() {
                 continue;
             }
 
             let value_span = self.current_span();
             let value = self.parse_value_string(arg, arg, value_span);
-            self.insert_value(name, value);
+            self.insert_value_path_to(InsertTarget::Current, schema.insertion_path(), value);
             self.index += 1;
             return true;
         }
@@ -1195,20 +1210,43 @@ impl<'a> ParseContext<'a> {
         })
     }
 
-    /// Insert a value at the arg's effective name (flat, not nested).
-    /// For repeated flags (Vec fields), accumulates values into an array.
-    fn insert_value(&mut self, name: &str, value: ConfigValue) {
-        self.insert_value_to(InsertTarget::Current, name, value);
-    }
-
-    /// Insert a value to a specific target (current level or parent level).
-    fn insert_value_to(&mut self, target: InsertTarget, name: &str, value: ConfigValue) {
+    /// Insert a value to a specific target and ConfigValue path.
+    fn insert_value_path_to(&mut self, target: InsertTarget, path: &[String], value: ConfigValue) {
         let result_map = match target {
             InsertTarget::Current => &mut self.result,
             InsertTarget::Parent(idx) => &mut self.parent_stack[idx].result,
         };
 
-        match result_map.entry(name.to_string()) {
+        Self::insert_value_at_path(result_map, path, value);
+    }
+
+    fn insert_value_at_path(
+        result_map: &mut IndexMap<String, ConfigValue, RandomState>,
+        path: &[String],
+        value: ConfigValue,
+    ) {
+        let Some((head, tail)) = path.split_first() else {
+            return;
+        };
+
+        if !tail.is_empty() {
+            let entry = result_map
+                .entry(head.clone())
+                .or_insert_with(|| ConfigValue::Object(Sourced::new(IndexMap::default())));
+            match entry {
+                ConfigValue::Object(sourced) => {
+                    Self::insert_value_at_path(&mut sourced.value, tail, value);
+                }
+                existing => {
+                    let mut nested = IndexMap::default();
+                    Self::insert_value_at_path(&mut nested, tail, value);
+                    *existing = ConfigValue::Object(Sourced::new(nested));
+                }
+            }
+            return;
+        }
+
+        match result_map.entry(head.clone()) {
             indexmap::map::Entry::Vacant(entry) => {
                 entry.insert(value);
             }
@@ -1235,9 +1273,19 @@ impl<'a> ParseContext<'a> {
         }
     }
 
-    /// Check if a value exists at the given name.
-    fn has_value(&self, name: &str) -> bool {
-        self.result.contains_key(name)
+    /// Check if a value exists at the given insertion path.
+    fn has_value_path(&self, path: &[String]) -> bool {
+        let Some((head, tail)) = path.split_first() else {
+            return false;
+        };
+        let mut current = self.result.get(head);
+        for segment in tail {
+            current = match current {
+                Some(ConfigValue::Object(sourced)) => sourced.value.get(segment),
+                _ => return false,
+            };
+        }
+        current.is_some()
     }
 
     fn increment_counted(&mut self, name: &str) {
@@ -1301,7 +1349,12 @@ impl<'a> ParseContext<'a> {
 
             // Merge builder's value into result under the config field name
             if let Some(config_value) = builder_output.value {
-                self.result.insert(config_field_name.clone(), config_value);
+                let value = if let Some(existing) = self.result.shift_remove(&config_field_name) {
+                    crate::merge::merge(existing, config_value, &config_field_name).value
+                } else {
+                    config_value
+                };
+                self.result.insert(config_field_name.clone(), value);
             }
 
             if multiple_config_roots {
@@ -1764,6 +1817,29 @@ mod tests {
         config: ServerConfigWithFlattenCli,
     }
 
+    #[derive(Facet)]
+    struct FlatRunConfigRootCli {
+        tui: bool,
+        model: String,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithFlattenedConfigRootCli {
+        #[facet(args::config)]
+        #[facet(flatten)]
+        run: FlatRunConfigRootCli,
+    }
+
+    #[derive(Facet)]
+    struct ArgsWithConflictingFlattenedConfigRootCli {
+        #[facet(args::named)]
+        model: String,
+
+        #[facet(args::config)]
+        #[facet(flatten)]
+        run: FlatRunConfigRootCli,
+    }
+
     #[test]
     fn test_config_override_with_flattened_struct() {
         // Flattened fields are accessed directly without the wrapper field name.
@@ -1842,6 +1918,44 @@ mod tests {
         assert_diagnostic_contains::<ArgsWithFlattenedConfigCli>(
             &["--no-config.port"],
             "unknown flag",
+        );
+    }
+
+    #[test]
+    fn test_flattened_config_root_exposes_fields_as_cli_flags() {
+        assert_parses_to::<ArgsWithFlattenedConfigRootCli>(
+            &["--tui", "--model", "1.7b"],
+            cv::object([(
+                "run",
+                cv::object([
+                    ("tui", cv::bool(true, "--tui")),
+                    ("model", cv::string("1.7b", "--model")),
+                ]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_flattened_config_root_exposes_no_prefix_for_bool() {
+        assert_parses_to::<ArgsWithFlattenedConfigRootCli>(
+            &["--no-tui", "--model", "1.7b"],
+            cv::object([(
+                "run",
+                cv::object([
+                    ("tui", cv::bool(false, "--no-tui")),
+                    ("model", cv::string("1.7b", "--model")),
+                ]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn test_flattened_config_root_rejects_cli_flag_conflicts() {
+        let err = Schema::from_shape(ArgsWithConflictingFlattenedConfigRootCli::SHAPE)
+            .expect_err("conflicting flattened config root should fail schema construction");
+        assert!(
+            err.to_string().contains("duplicate flag `--model`"),
+            "unexpected error: {err}"
         );
     }
 

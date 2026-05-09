@@ -736,6 +736,10 @@ impl<T: Facet<'static>> Driver<T> {
         // Phase 4: Assign virtual spans and deserialize into T
         // The span registry maps virtual spans back to real source locations
         let mut value_with_virtual_spans = value_with_defaults;
+        flatten_config_roots_for_deserialization(
+            &mut value_with_virtual_spans,
+            &self.config.schema,
+        );
         let span_registry = assign_virtual_spans(&mut value_with_virtual_spans);
 
         let value: T = match from_config_value(&value_with_virtual_spans) {
@@ -792,6 +796,40 @@ impl<T: Facet<'static>> Driver<T> {
             merged_config: value_with_virtual_spans,
             schema: self.config.schema.clone(),
         })
+    }
+}
+
+fn flatten_config_roots_for_deserialization(
+    value: &mut ConfigValue,
+    schema: &crate::schema::Schema,
+) {
+    let ConfigValue::Object(root) = value else {
+        return;
+    };
+
+    for config_schema in schema.configs() {
+        if !config_schema.flattened_root() {
+            continue;
+        }
+
+        let Some(field_name) = config_schema.field_name() else {
+            continue;
+        };
+
+        let Some(config_value) = root.value.shift_remove(field_name) else {
+            continue;
+        };
+
+        match config_value {
+            ConfigValue::Object(config_object) => {
+                for (key, value) in config_object.value {
+                    root.value.insert(key, value);
+                }
+            }
+            other => {
+                root.value.insert(field_name.to_string(), other);
+            }
+        }
     }
 }
 
