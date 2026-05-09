@@ -535,7 +535,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "figue"
-version = "3.0.1"
+version = "4.0.0"
 dependencies = [
  "ariadne",
  "camino",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "figue-attrs"
-version = "3.0.1"
+version = "4.0.0"
 dependencies = [
  "facet",
 ]
