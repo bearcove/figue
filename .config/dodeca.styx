@@ -1,0 +1,16 @@
+@schema {id crate:dodeca-config@1, cli ddc}
+
+// Dodeca configuration for the figue documentation site.
+// Built with `ddc build`, served locally with `ddc serve`.
+
+content docs/content
+output docs/public
+
+link_check {
+    // Domains to skip (anti-bot policies)
+    // skip_domains (example.com)
+}
+
+stable_assets (
+    "docs/static/CNAME CNAME"
+)

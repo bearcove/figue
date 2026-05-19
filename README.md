@@ -35,6 +35,17 @@ Ok(())
 
 The entry point of figue is [`builder`] — let yourself be guided from there.
 
+## Documentation
+
+- **Guide & reference**: <https://figue.bearcove.eu> — task-oriented guide,
+  copy-paste recipes, and an exhaustive reference (attributes, grammar, merge
+  rules, error catalog).
+- **API docs**: <https://docs.rs/figue>
+
+The site sources live in `docs/` and are built with
+[dodeca](https://github.com/bearcove/dodeca) (`ddc serve` locally, deployed to
+GitHub Pages on push to `main`).
+
 ## Color
 
 figue uses [facet-color](https://docs.rs/facet-color) for coloring output.

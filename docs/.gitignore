@@ -1,0 +1,6 @@
+public/
+.sass-cache/
+static/hljs/
+.dodeca.db/
+.cache/
+.DS_Store

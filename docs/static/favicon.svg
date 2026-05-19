@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#6d2950"/>
+  <!-- stem -->
+  <path d="M32 11c0-3 2-5 6-6" fill="none" stroke="#9bd16a" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- leaf -->
+  <path d="M32 13c5-5 12-5 15-2-1 6-7 9-12 8z" fill="#9bd16a"/>
+  <!-- fig body -->
+  <path d="M32 15c-9 0-17 8-17 19 0 11 8 18 17 18s17-7 17-18c0-11-8-19-17-19z" fill="#e26aa0"/>
+  <!-- seeds -->
+  <g fill="#fce3ef">
+    <circle cx="32" cy="34" r="2"/>
+    <circle cx="26" cy="38" r="1.7"/>
+    <circle cx="38" cy="38" r="1.7"/>
+    <circle cx="29" cy="44" r="1.7"/>
+    <circle cx="35" cy="44" r="1.7"/>
+    <circle cx="32" cy="40" r="1.5"/>
+  </g>
+</svg>

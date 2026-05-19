@@ -1,0 +1,60 @@
+# Build and deploy the figue documentation site to GitHub Pages.
+# Published at https://figue.bearcove.eu
+name: Website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.config/dodeca.styx'
+      - '.github/workflows/website.yml'
+  workflow_dispatch:
+
+# Allow the GITHUB_TOKEN to deploy to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One concurrent deployment at a time
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dodeca
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bearcove/dodeca/releases/latest/download/dodeca-installer.sh | sh
+
+      - name: Build website with dodeca
+        run: ~/.cargo/bin/ddc build
+
+      # Ensure the custom domain is set regardless of how dodeca handles
+      # stable_assets across versions.
+      - name: Write CNAME
+        run: echo "figue.bearcove.eu" > docs/public/CNAME
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/public
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
