@@ -27,8 +27,8 @@ figue is built on [facet](https://facet.rs). You need both `facet` (for the
 ```toml
 # Cargo.toml
 [dependencies]
-facet = "0.46"
-figue = "4"
+facet = "0.50.0-rc.0"
+figue = "0.50.0-rc.0"
 ```
 
 (Check [crates.io/crates/figue](https://crates.io/crates/figue) for the current
