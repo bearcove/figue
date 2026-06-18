@@ -1,5 +1,14 @@
 # figue
 
+> [!IMPORTANT]
+> Figue has moved into the Facet monorepo.
+>
+> New source: <https://github.com/facet-rs/facet/tree/main/figue>
+>
+> New docs entry point: <https://facet.rs/ecosystem/figue/>
+>
+> This repository is kept only as a historical pointer and will be archived.
+
 [![crates.io](https://img.shields.io/crates/v/figue.svg)](https://crates.io/crates/figue)
 [![documentation](https://docs.rs/figue/badge.svg)](https://docs.rs/figue)
 [![MIT/Apache-2.0 licensed](https://img.shields.io/crates/l/figue.svg)](LICENSE-MIT)
