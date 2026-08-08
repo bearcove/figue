@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["figue", "figue-attrs"]
+
+[workspace.package]
+version = "5.0.0-rc.5"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bearcove/figue"
+homepage = "https://github.com/bearcove/figue"
+
+[workspace.dependencies]
+ariadne = "0.6"
+camino = "1.2.1"
+facet = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-error = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-core = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-format = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-pretty = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-json = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-reflect = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-solver = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-testhelpers = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+figue = { path = "figue", version = "5.0.0-rc.5" }
+heck = "0.5"
+indexmap = { version = "2.12.1", default-features = false }
+insta = "1.44.3"
+owo-colors = "4.2.3"
+strip-ansi-escapes = "0.2.1"
+strsim = "0.11"
+supports-color = "3"
+tempfile = "3.23"
+tracing = { version = "0.1.43", default-features = false, features = ["std", "attributes"] }
+unicode-width = "0.2.2"
+figue-attrs = { path = "figue-attrs", version = "5.0.0-rc.5" }
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(facet_no_doc)", "cfg(kani)"] }
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"

@@ -42,13 +42,13 @@ rand = { version = "0.9.2", optional = true }
 rand_chacha = { version = "0.9.0", optional = true }
 
 [dev-dependencies]
-facet-format = { path = "../facet-format", features = ["tracing"] }
-facet-default = { path = "../facet-default" }
-facet-json = { path = "../facet-json", features = ["tracing"] }
-facet-reflect = { path = "../facet-reflect", features = ["tracing"] }
-facet = { path = "../facet", features = ["all-impls"] }
-facet-solver = { path = "../facet-solver" }
-facet-testhelpers = { path = "../facet-testhelpers" }
+facet-format = { workspace = true, features = ["tracing"] }
+facet-default = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-json = { workspace = true, features = ["tracing"] }
+facet-reflect = { workspace = true, features = ["tracing"] }
+facet = { workspace = true, features = ["all-impls"] }
+facet-solver.workspace = true
+facet-testhelpers.workspace = true
 insta.workspace = true
 tempfile.workspace = true
 

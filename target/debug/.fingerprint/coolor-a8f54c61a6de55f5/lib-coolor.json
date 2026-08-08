@@ -1,0 +1,1 @@
+{"rustc":12019306335353385202,"features":"[\"default\"]","declared_features":"[\"crossterm\", \"default\"]","target":2503704509968998352,"profile":2241668132362809309,"path":9067996149512827157,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"debug/.fingerprint/coolor-a8f54c61a6de55f5/dep-lib-coolor","checksum":false}}],"rustflags":[],"config":9396254390672932401,"compile_kind":0}
