@@ -1,0 +1,1 @@
+{"rustc":12019306335353385202,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[14519296463401130263,"build_script_build",false,6731550048953152162]],"local":[{"RerunIfChanged":{"output":"debug/build/facet-core-96574ed66e30a356/output","paths":["build.rs"]}}],"rustflags":[],"config":0,"compile_kind":0}

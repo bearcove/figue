@@ -1,0 +1,4 @@
+cargo:rustc-check-cfg=cfg(facet_json_jit_active)
+cargo:rustc-cfg=facet_json_jit_active
+cargo:rerun-if-changed=stencils/stencils.rs
+cargo:rerun-if-changed=build.rs

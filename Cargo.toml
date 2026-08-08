@@ -1,54 +1,42 @@
 [workspace]
-members = ["crates/*"]
 resolver = "3"
+members = ["figue", "figue-attrs"]
 
 [workspace.package]
-version = "5.0.0-rc.0"
+version = "5.0.0-rc.5"
 edition = "2024"
-rust-version = "1.90.0"
-authors = ["Amos Wenger <amos@bearcove.eu>"]
+rust-version = "1.92"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bearcove/figue"
 homepage = "https://github.com/bearcove/figue"
-keywords = ["cli", "args", "parser", "facet", "command-line"]
-categories = ["command-line-interface"]
 
 [workspace.dependencies]
-figue-attrs = { path = "crates/figue-attrs", version = "5.0.0-rc.0" }
-
-# Facet ecosystem
-facet = { version = "0.50.0-rc.0", features = ["indexmap", "camino", "net"] }
-facet-core = { version = "0.50.0-rc.0" }
-facet-format = { version = "0.50.0-rc.0" }
-facet-json = { version = "0.50.0-rc.0" }
-facet-reflect = { version = "0.50.0-rc.0" }
-facet-pretty = { version = "0.50.0-rc.0" }
-facet-error = { version = "0.50.0-rc.0" }
-facet-solver = { version = "0.50.0-rc.0" }
-facet-testhelpers = { version = "0.50.0-rc.0" }
-
-# External dependencies
-camino = "1.1"
-heck = "0.5.0"
-indexmap = "2"
-owo-colors = "4"
-tracing = "0.1"
 ariadne = "0.6"
-unicode-width = "0.2.2"
+camino = "1.2.1"
+facet = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-error = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-core = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-format = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-pretty = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-json = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-reflect = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-solver = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+facet-testhelpers = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
+figue = { path = "figue", version = "5.0.0-rc.5" }
+heck = "0.5"
+indexmap = { version = "2.12.1", default-features = false }
+insta = "1.44.3"
+owo-colors = "4.2.3"
 strip-ansi-escapes = "0.2.1"
 strsim = "0.11"
-insta = "1"
 supports-color = "3"
-tempfile = "3"
+tempfile = "3.23"
+tracing = { version = "0.1.43", default-features = false, features = ["std", "attributes"] }
+unicode-width = "0.2.2"
+figue-attrs = { path = "figue-attrs", version = "5.0.0-rc.5" }
 
-# Uncomment for local development with facet
-# [patch."https://github.com/facet-rs/facet"]
-# facet = { path = "../facet/facet" }
-# facet-core = { path = "../facet/facet-core" }
-# facet-format = { path = "../facet/facet-format" }
-# facet-json = { path = "../facet/facet-json" }
-# facet-reflect = { path = "../facet/facet-reflect" }
-# facet-pretty = { path = "../facet/facet-pretty" }
-# facet-error = { path = "../facet/facet-error" }
-# facet-solver = { path = "../facet/facet-solver" }
-# facet-testhelpers = { path = "../facet/facet-testhelpers" }
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(facet_no_doc)", "cfg(kani)"] }
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"

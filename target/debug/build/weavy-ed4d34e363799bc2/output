@@ -1,0 +1,10 @@
+cargo::rustc-check-cfg=cfg(weavy_jit_active)
+cargo::rerun-if-changed=build.rs
+cargo::rerun-if-changed=build/jit_config.rs
+cargo::rerun-if-env-changed=WEAVY_JIT
+cargo::rustc-cfg=weavy_jit_active
+cargo::metadata=jit=1
+cargo:rerun-if-changed=stencils/hostcall.rs
+cargo:rerun-if-changed=build.rs
+cargo:rerun-if-changed=stencils/async_ops.rs
+cargo:rerun-if-changed=stencils/task_ops.rs
