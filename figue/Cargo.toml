@@ -43,7 +43,7 @@ rand_chacha = { version = "0.9.0", optional = true }
 
 [dev-dependencies]
 facet-format = { workspace = true, features = ["tracing"] }
-facet-default = { git = "https://github.com/facet-rs/facet", rev = "dc57e24e381f0c61b4acfa242c368656a84348d4" }
+facet-default = { git = "https://github.com/facet-rs/facet", rev = "5705fa6c51289bea49f5729c52dc5e23cedce4f8" }
 facet-json = { workspace = true, features = ["tracing"] }
 facet-reflect = { workspace = true, features = ["tracing"] }
 facet = { workspace = true, features = ["all-impls"] }
