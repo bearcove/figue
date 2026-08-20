@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0-rc.6](https://github.com/bearcove/figue/compare/figue-v5.0.0-rc.5...figue-v5.0.0-rc.6) - 2026-08-20
+
+### Other
+
+- use the published Facet 0.50.0-rc.7 crate family
+
+
 ## [5.0.0-rc.5](https://github.com/facet-rs/facet/compare/figue-attrs-v5.0.0-rc.4...figue-attrs-v5.0.0-rc.5) - 2026-06-28
 
 ### Other
